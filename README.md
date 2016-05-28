@@ -4,11 +4,12 @@
 
 ###Compilation instructions
 
+Tested & compiled on an Arduino 2560 mega & Ramps 1.4
+
 1.  Install Arduino IDE
     You get the latest Arduino IDE here:
     http://arduino.cc/en/Main/Software
 
-    You need at least 1.0 for the Atmel AVR based boards and 1.5 for the ARM based boards like the due.
 
 2.  Make sure the serial driver for your printer board is installed. The Arduino IDE contains signed drivers
     for the Arduino boards. Depending on your board you might need different drivers then these. For Linux and Mac
