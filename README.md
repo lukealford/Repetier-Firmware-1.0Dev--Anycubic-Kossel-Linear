@@ -52,8 +52,8 @@ http://escher3d.com/pages/wizards/wizarddelta.php
 
 Run a 7 point calibration and add the adjustment it calulates into your eeprom settings.
 
-*End stops = Tower X,Y,Z endstrop offset
-*Diagonal rod Length = Diagonal rod Length
-*Delta Radius =  Max printable radius
-*Homed height =  Z Max Length
-*Tower position angle corrections = Delta Radius A,B,C 
+* End stops = Tower X,Y,Z endstrop offset
+* Diagonal rod Length = Diagonal rod Length
+* Delta Radius =  Max printable radius
+* Homed height =  Z Max Length
+* Tower position angle corrections = Delta Radius A,B,C 
