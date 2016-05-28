@@ -37,12 +37,6 @@ to change these values. Alternatively, send the commands
  M500
 to copy the new values in Configuration.h to eeprom.
 
-
-###IMPORTANT FOR DUE USERS
-
-There is an additional folder AdditionalArduinoFiles with separate readme that describes how to get
-watchdog working. It is a very good idea to compile with working watchdog!!!
-
 ###Calibration
 
 Currently calibration is manual for this measure you Z height from the base of the bed to the tip of the hotend, set this your epprom under Z Max Length. Save and rehome.
@@ -56,4 +50,7 @@ Run a 7 point calibration and add the adjustment it calulates into your eeprom s
 * Diagonal rod Length = Diagonal rod Length
 * Delta Radius =  Max printable radius
 * Homed height =  Z Max Length
-* Tower position angle corrections = Delta Radius A,B,C 
+* Tower position angle corrections = Delta Radius A,B,C
+
+
+Credit to [Repetier](https://github.com/repetier/Repetier-Firmware) for both awesome firmware and printer control.
