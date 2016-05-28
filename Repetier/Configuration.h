@@ -119,7 +119,7 @@
 #define EXT0_WAIT_RETRACT_UNITS 0
 #define EXT0_SELECT_COMMANDS ""
 #define EXT0_DESELECT_COMMANDS ""
-#define EXT0_EXTRUDER_COOLER_PIN HEATER_2_PIN
+#define EXT0_EXTRUDER_COOLER_PIN ORIG_FAN_PIN
 #define EXT0_EXTRUDER_COOLER_SPEED 255
 #define EXT0_DECOUPLE_TEST_PERIOD 12000
 #define EXT0_JAM_PIN -1
@@ -194,7 +194,7 @@ If the firmware is in laser mode, it can control a laser output to cut or engrav
 Please use this feature only if you know about safety and required protection. Lasers are
 dangerous and can hurt or make you blind!!!
 
-The default laser driver only supports laser on and off. Here you control the eíntensity with
+The default laser driver only supports laser on and off. Here you control the intensity with
 your feedrate. For exchangeable diode lasers this is normally enough. If you need more control
 you can set the intensity in a range 0-255 with a custom extension to the driver. See driver.h
 and comments on how to extend the functions non invasive with our event system.
@@ -347,10 +347,10 @@ It also can add a delay to wait for spindle to run on full speed.
 #define MAX_INACTIVE_TIME 0L
 #define MAX_FEEDRATE_X 200
 #define MAX_FEEDRATE_Y 200
-#define MAX_FEEDRATE_Z 2
+#define MAX_FEEDRATE_Z 200
 #define HOMING_FEEDRATE_X 40
 #define HOMING_FEEDRATE_Y 40
-#define HOMING_FEEDRATE_Z 2
+#define HOMING_FEEDRATE_Z 40
 #define HOMING_ORDER HOME_ORDER_ZXY
 #define ZHOME_MIN_TEMPERATURE 0
 #define ZHOME_HEAT_ALL 1
@@ -369,7 +369,7 @@ It also can add a delay to wait for spindle to run on full speed.
 #define DOUBLE_STEP_DELAY 0 // time in microseconds
 #define MAX_ACCELERATION_UNITS_PER_SQ_SECOND_X 1000
 #define MAX_ACCELERATION_UNITS_PER_SQ_SECOND_Y 1000
-#define MAX_ACCELERATION_UNITS_PER_SQ_SECOND_Z 100
+#define MAX_ACCELERATION_UNITS_PER_SQ_SECOND_Z 1000
 #define MAX_TRAVEL_ACCELERATION_UNITS_PER_SQ_SECOND_X 100
 #define MAX_TRAVEL_ACCELERATION_UNITS_PER_SQ_SECOND_Y 100
 #define MAX_TRAVEL_ACCELERATION_UNITS_PER_SQ_SECOND_Z 100
@@ -602,7 +602,7 @@ Values must be in range 1..255
             "waitRetractUnits": 0,
             "waitRetract": 0,
             "stepsPerMM": 370,
-            "coolerPin": "HEATER_2_PIN",
+            "coolerPin": "ORIG_FAN_PIN",
             "coolerSpeed": 255,
             "selectCommands": "",
             "deselectCommands": "",
@@ -650,10 +650,10 @@ Values must be in range 1..255
     "yHomingSpeed": 40,
     "yTravelAcceleration": 100,
     "yPrintAcceleration": 1000,
-    "zMaxSpeed": 2,
-    "zHomingSpeed": 2,
+    "zMaxSpeed": 200,
+    "zHomingSpeed": 40,
     "zTravelAcceleration": 100,
-    "zPrintAcceleration": 100,
+    "zPrintAcceleration": 1000,
     "xMotor": {
         "name": "X motor",
         "step": "ORIG_X_STEP_PIN",
