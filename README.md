@@ -40,7 +40,18 @@ to copy the new values in Configuration.h to eeprom.
 
 ###Calibration
 
-Currently calibration is manual for this measure you Z height from the base of the bed to the tip of the hotend, set this your epprom under Z Max Length. Save and rehome.
+##Autobed level
+This repository has support for the [BL-Touch](https://www.indiegogo.com/projects/bltouch-auto-bed-leveling-sensor-for-3d-printers#/)
+
+See the BL Touch in action,
+[Anycubic Kossel - BLTouch](https://www.youtube.com/watch?v=ye8GKOYioHY)
+
+To run Autobed leveling following this [z-probing](https://www.repetier.com/documentation/repetier-firmware/z-probing/) guide by Repetier is great.
+
+
+##Manual Calibration
+
+Measure your Z height from the base of the bed to the tip of the hotend, set this your eeprom under Z Max Length. Save and rehome.
 
 Then visit this website
 http://escher3d.com/pages/wizards/wizarddelta.php
