@@ -34,7 +34,7 @@ uint8_t Extruder::mixingDir = 10;
 uint8_t Extruder::activeMixingExtruder = 0;
 #endif // MIXING_EXTRUDER
 #ifdef SUPPORT_MAX6675
-extern int16_t read_max6675(uint8_t ss_pin);
+extern int16_t read_max6675(uint8_t ss_pin,fast8_t idx);
 #endif
 #ifdef SUPPORT_MAX31855
 extern int16_t read_max31855(uint8_t ss_pin);
@@ -111,7 +111,7 @@ void Extruder::manageTemperatures()
                     }
                 }
 #if SHARED_COOLER_BOARD_EXT
-                if(pwm_pos[PWM_BOARD_FAN]) enable = true;
+                if(pwm_pos[PWM_BOARD_FAN] == BOARD_FAN_SPEED) enable = true;
 #endif
                 extruder[0].coolerPWM = (enable ? extruder[0].coolerSpeed : 0);
             } // controller == 0
@@ -128,10 +128,14 @@ void Extruder::manageTemperatures()
         if(controller > 0 && controller < NUM_EXTRUDER) continue; // Mixing extruder only test for ext 0
 #endif // MIXING_EXTRUDER
 
+		if(controller == autotuneIndex)  // Ignore heater we are currently testing
+			continue;
 
         // Check for obvious sensor errors
-        if(act->currentTemperatureC < MIN_DEFECT_TEMPERATURE || act->currentTemperatureC > MAX_DEFECT_TEMPERATURE)   // no temp sensor or short in sensor, disable heater
-        {
+        if((act->currentTemperatureC < MIN_DEFECT_TEMPERATURE || act->currentTemperatureC > MAX_DEFECT_TEMPERATURE) &&
+            act->targetTemperatureC > MIN_DEFECT_TEMPERATURE /*is heating*/ &&
+            (act->preheatTime() == 0 || act->preheatTime() >= MILLISECONDS_PREHEAT_TIME /*preheating time is over*/))   // no temp sensor or short in sensor, disable heater
+        { 
             errorDetected = 1;
             if(extruderTempErrors < 10)    // Ignore short temporary failures
                 extruderTempErrors++;
@@ -276,13 +280,13 @@ void Extruder::manageTemperatures()
             else if(act->heatManager == HTR_DEADTIME)     // dead-time control
             {
                 act->startHoldDecouple(time);
-                float raising = 3.333 * (act->currentTemperatureC - act->tempArray[act->tempPointer]); // raising dT/dt, 3.33 = reciproke of time interval (300 ms)
+                float raising = 3.333 * (act->currentTemperatureC - act->tempArray[act->tempPointer]); // raising dT/dt, 3.33 = reciprocal of time interval (300 ms)
                 act->tempIState = 0.25 * (3.0 * act->tempIState + raising); // damp raising
                 output = (act->currentTemperatureC + act->tempIState * act->deadTime > act->targetTemperatureC ? 0 : act->pidDriveMax);
             }
             else // bang bang and slow bang bang
 #endif // TEMP_PID
-                if(act->heatManager == HTR_SLOWBANG)    // Bang-bang with reduced change frequency to save relais life
+                if(act->heatManager == HTR_SLOWBANG)    // Bang-bang with reduced change frequency to save relays life
                 {
                     if (time - act->lastTemperatureUpdate > HEATED_BED_SET_INTERVAL)
                     {
@@ -293,13 +297,13 @@ void Extruder::manageTemperatures()
                     }
                     else continue;
                 }
-                else     // Fast Bang-Bang fallback
+                else     // Fast Bang-Bang fall back
                 {
                     output = (on ? act->pidMax : 0);
                     if(on) act->startFullDecouple(time);
                     else act->stopDecouple();
                 }
-        } // Temperatur control
+        } // Temperature control
 #ifdef MAXTEMP
         if(act->currentTemperatureC > MAXTEMP) // Force heater off if MAXTEMP is exceeded
             output = 0;
@@ -344,30 +348,64 @@ void Extruder::manageTemperatures()
         }
 #endif // KILL_IF_SENSOR_DEFECT
         Printer::debugSet(8); // Go into dry mode
+		GCode::fatalError(PSTR("Heater/sensor failure"));
     } // any sensor defect
 #endif // NUM_TEMPERATURE_LOOPS
 
+    // Report temperatures every second, so we do not need to send M105
+    if(Printer::isAutoreportTemp()) {
+        millis_t now = HAL::timeInMilliseconds();
+        if(now-Printer::lastTempReport > 1000) {
+            Printer::lastTempReport = now;
+            Commands::printTemperatures();
+        }
+        
+    }
 }
 
 void TemperatureController::waitForTargetTemperature()
 {
     if(targetTemperatureC < 30) return;
     if(Printer::debugDryrun()) return;
-    millis_t time = HAL::timeInMilliseconds();
+    bool oldReport = Printer::isAutoreportTemp();
+    Printer::setAutoreportTemp(true);
+    //millis_t time = HAL::timeInMilliseconds();
     while(true)
     {
-        if( (HAL::timeInMilliseconds() - time) > 1000 )   //Print Temp Reading every 1 second while heating up.
+        /*if( (HAL::timeInMilliseconds() - time) > 1000 )   //Print Temp Reading every 1 second while heating up.
         {
             Commands::printTemperatures();
             time = HAL::timeInMilliseconds();
-        }
+        }*/
         Commands::checkForPeriodicalActions(true);
 		GCode::keepAlive(WaitHeater);
-        if(fabs(targetTemperatureC - currentTemperatureC) <= 1)
+        if(fabs(targetTemperatureC - currentTemperatureC) <= 1) {
+            Printer::setAutoreportTemp(oldReport);
             return;
+        }
     }
 }
 
+fast8_t TemperatureController::errorState() {
+	if(isSensorDefect())
+		return 1;
+	if(isSensorDecoupled())
+		return 2;
+#if EXTRUDER_JAM_CONTROL
+	if(isFilamentChange())
+		return 6;
+#if JAM_METHOD == 1
+	if(isJammed())
+		return 5; // jammed or out of filament
+	if(isSlowedDown())
+		return 3; // slipping				
+#else // only a simple switch to pause on end of filament
+	if(isJammed())
+		return 6; // out of filament	
+#endif
+#endif
+	return 0;
+}
 /* For pausing we negate target temperature, so negative value means paused extruder.
 Since temp. is negative no heating will occur. */
 void Extruder::pauseExtruders()
@@ -398,6 +436,7 @@ void TemperatureController::resetAllErrorStates() {
 		tempController[i]->removeErrorStates();
 	}
 #endif	
+	Printer::unsetAnyTempsensorDefect();
 }
 
 #if EXTRUDER_JAM_CONTROL
@@ -430,7 +469,11 @@ void Extruder::resetJamSteps()
 {
     jamStepsOnSignal = jamStepsSinceLastSignal;
     jamStepsSinceLastSignal = 0;
-    Printer::setInterruptEvent(PRINTER_INTERRUPT_EVENT_JAM_SIGNAL0 + id, false);
+	if(tempControl.isFilamentChange()) {
+		tempControl.setFilamentChange(false);
+	} else {
+		Printer::setInterruptEvent(PRINTER_INTERRUPT_EVENT_JAM_SIGNAL0 + id, false);
+	}
 }
 #endif
 
@@ -439,6 +482,22 @@ void Extruder::initHeatedBed()
 #if HAVE_HEATED_BED
 #if TEMP_PID
     heatedBedController.updateTempControlVars();
+#endif
+
+#if defined(SUPPORT_MAX6675) || defined(SUPPORT_MAX31855)
+if(heatedBedController.sensorType == 101 || heatedBedController.sensorType == 102)
+{
+	WRITE(SCK_PIN, 0);
+	SET_OUTPUT(SCK_PIN);
+	WRITE(MOSI_PIN, 1);
+	SET_OUTPUT(MOSI_PIN);
+	WRITE(MISO_PIN, 1);
+	SET_INPUT(MISO_PIN);
+	HAL::pinMode(SS, OUTPUT);
+	HAL::digitalWrite(SS, 1);
+	HAL::pinMode(heatedBedController.sensorPin, OUTPUT);
+	HAL::digitalWrite(heatedBedController.sensorPin, 1);
+}
 #endif
 #endif
 }
@@ -481,7 +540,7 @@ void createGenericTable(short table[GENERIC_THERM_NUM_ENTRIES][2],short minTemp,
 }
 #endif
 
-/** \brief Initalizes all extruder.
+/** \brief Initializes all extruder.
 
 Updates the pin configuration needed for the extruder and activates extruder 0.
 Starts a interrupt based analog input reader, which is used by simple thermistors
@@ -593,8 +652,9 @@ void Extruder::initExtruder()
     WRITE(HEATED_BED_HEATER_PIN, HEATER_PINS_INVERTED);
     Extruder::initHeatedBed();
 #endif
+#if ANALOG_INPUTS > 0
     HAL::analogStart();
-
+#endif
 }
 
 void TemperatureController::updateTempControlVars()
@@ -633,7 +693,7 @@ void Extruder::selectExtruderById(uint8_t extruderId)
 #if !MIXING_EXTRUDER
 	Com::printFLN(PSTR("SelectExtruder:"), static_cast<int>(extruderId));
 #endif
-    if(Printer::isHomed() && extruder[extruderId].zOffset < Extruder::current->zOffset) { // prevent extruder from hitting bed
+    if(Printer::isHomedAll() && extruder[extruderId].zOffset < Extruder::current->zOffset) { // prevent extruder from hitting bed - move bed down a bit
 		Printer::offsetZ = -extruder[extruderId].zOffset * Printer::invAxisStepsPerMM[Z_AXIS];
 	    Printer::moveToReal(IGNORE_COORDINATE, IGNORE_COORDINATE, IGNORE_COORDINATE, IGNORE_COORDINATE, Printer::homingFeedrate[Z_AXIS]);
 	    Commands::waitUntilEndOfAllMoves();
@@ -654,10 +714,15 @@ void Extruder::selectExtruderById(uint8_t extruderId)
     float oldfeedrate = Printer::feedrate;
     Extruder::current->extrudePosition = Printer::currentPositionSteps[E_AXIS];
 #if DUAL_X_AXIS
+	float lastX = Printer::lastCmdPos[X_AXIS];
 	// Park current extruder
 	int32_t dualXPos = Printer::currentPositionSteps[X_AXIS] - Printer::xMinSteps;
-	if(Printer::isHomed() && executeSelect)
+	if(Printer::isXHomed() && executeSelect) {
+		bool oldDestCheck = Printer::isNoDestinationCheck();
+		Printer::setNoDestinationCheck(true);
 		PrintLine::moveRelativeDistanceInSteps(Extruder::current->xOffset - dualXPos, 0, 0, 0, EXTRUDER_SWITCH_XY_SPEED, true, false);
+		Printer::setNoDestinationCheck(oldDestCheck);
+	}
 #endif	
     Extruder::current = &extruder[extruderId];
 #ifdef SEPERATE_EXTRUDER_POSITIONS
@@ -696,24 +761,33 @@ void Extruder::selectExtruderById(uint8_t extruderId)
 		Printer::updateCurrentPosition(true);
 		GCode::executeFString(Extruder::current->selectCommands);
 	}
+#if LAZY_DUAL_X_AXIS == 0
 	Printer::currentPositionSteps[X_AXIS] = Extruder::current->xOffset - dualXPos;
-	if(Printer::isHomed() && executeSelect)
+	if(Printer::isXHomed() && executeSelect) {
 		PrintLine::moveRelativeDistanceInSteps(-Extruder::current->xOffset + dualXPos, 0, 0, 0, EXTRUDER_SWITCH_XY_SPEED, true, false);
-	Printer::currentPositionSteps[X_AXIS] = dualXPos + Printer::xMinSteps;
+		Printer::currentPositionSteps[X_AXIS] = dualXPos + Printer::xMinSteps;		
+	}
+#endif
     Printer::offsetX = 0;
-	Printer::updateCurrentPosition(true);
+#if LAZY_DUAL_X_AXIS == 1
+	Printer::lastCmdPos[X_AXIS] = lastX;
+	Printer::currentPositionSteps[X_AXIS] = Printer::xMinSteps + Extruder::current->xOffset;
+#endif	
+	Printer::updateCurrentPosition(false);
 	executeSelect = false;
-#else	
+#else	// DUAL_X_AXIS
     Printer::offsetX = -Extruder::current->xOffset * Printer::invAxisStepsPerMM[X_AXIS];
 #endif
     Printer::offsetY = -Extruder::current->yOffset * Printer::invAxisStepsPerMM[Y_AXIS];
     Printer::offsetZ = -Extruder::current->zOffset * Printer::invAxisStepsPerMM[Z_AXIS];
     Commands::changeFlowrateMultiply(Printer::extrudeMultiply); // needed to adjust extrusionFactor to possibly different diameter
-    if(Printer::isHomed()) {
+#if DUAL_X_AXIS == 0 || LAZY_DUAL_X_AXIS == 0	
+    if(Printer::isHomedAll()) {
         Printer::moveToReal(cx, cy, cz, IGNORE_COORDINATE, EXTRUDER_SWITCH_XY_SPEED);
 	}
+#endif	
     Printer::feedrate = oldfeedrate;
-    Printer::updateCurrentPosition();
+    Printer::updateCurrentPosition(false);
 #if USE_ADVANCE
     HAL::resetExtruderDirection();
 #endif
@@ -758,6 +832,11 @@ void Extruder::setTemperatureForExtruder(float temperatureInCelsius, uint8_t ext
     TemperatureController *tc = tempController[extr];
     if(tc->sensorType == 0) temperatureInCelsius = 0;
     //if(temperatureInCelsius==tc->targetTemperatureC) return;
+    if (temperatureInCelsius < MAX_ROOM_TEMPERATURE)
+        tc->resetPreheatTime();
+    else if (tc->targetTemperatureC == 0)
+        tc->startPreheatTime();
+
     tc->setTargetTemperature(temperatureInCelsius);
     tc->updateTempControlVars();
     if(beep && temperatureInCelsius > MAX_ROOM_TEMPERATURE)
@@ -802,20 +881,23 @@ void Extruder::setTemperatureForExtruder(float temperatureInCelsius, uint8_t ext
         UI_STATUS_UPD_F(Com::translatedF(UI_TEXT_HEATING_EXTRUDER_ID));
         EVENT_WAITING_HEATER(actExtruder->id);
         bool dirRising = actExtruder->tempControl.targetTemperatureC > actExtruder->tempControl.currentTemperatureC;
-        millis_t printedTime = HAL::timeInMilliseconds();
+        //millis_t printedTime = HAL::timeInMilliseconds();
         millis_t waituntil = 0;
 #if RETRACT_DURING_HEATUP
         uint8_t retracted = 0;
 #endif
         millis_t currentTime;
+		millis_t maxWaitUntil = 0;
+        bool oldAutoreport = Printer::isAutoreportTemp();
+        Printer::setAutoreportTemp(true);
         do
         {
             previousMillisCmd = currentTime = HAL::timeInMilliseconds();
-            if( (currentTime - printedTime) > 1000 )   //Print Temp Reading every 1 second while heating up.
+            /*if( (currentTime - printedTime) > 1000 )   //Print Temp Reading every 1 second while heating up.
             {
                 Commands::printTemperatures();
                 printedTime = currentTime;
-            }
+            }*/
             Commands::checkForPeriodicalActions(true);
 			GCode::keepAlive(WaitHeater);
             //gcode_read_serial();
@@ -826,18 +908,26 @@ void Extruder::setTemperatureForExtruder(float temperatureInCelsius, uint8_t ext
                 retracted = 1;
             }
 #endif
+			if(maxWaitUntil == 0) {
+				if(dirRising ? actExtruder->tempControl.currentTemperatureC >= actExtruder->tempControl.targetTemperatureC - 5 : actExtruder->tempControl.currentTemperatureC <= actExtruder->tempControl.targetTemperatureC + 5) {
+					maxWaitUntil = currentTime + 120000L;
+				}
+			} else if((millis_t)(maxWaitUntil - currentTime) < 2000000000UL) {
+				break;
+			}
             if((waituntil == 0 &&
                     (dirRising ? actExtruder->tempControl.currentTemperatureC >= actExtruder->tempControl.targetTemperatureC - 1
                      : actExtruder->tempControl.currentTemperatureC <= actExtruder->tempControl.targetTemperatureC + 1))
-#if defined(TEMP_HYSTERESIS) && TEMP_HYSTERESIS>=1
+#if defined(TEMP_HYSTERESIS) && TEMP_HYSTERESIS >= 1
                     || (waituntil != 0 && (abs(actExtruder->tempControl.currentTemperatureC - actExtruder->tempControl.targetTemperatureC)) > TEMP_HYSTERESIS)
 #endif
               )
             {
                 waituntil = currentTime + 1000UL*(millis_t)actExtruder->watchPeriod; // now wait for temp. to stabilize
-            }
+            }			
         }
         while(waituntil == 0 || (waituntil != 0 && (millis_t)(waituntil - currentTime) < 2000000000UL));
+        Printer::setAutoreportTemp(oldAutoreport);
 #if RETRACT_DURING_HEATUP
         if (retracted && actExtruder == Extruder::current)
         {
@@ -876,7 +966,7 @@ void Extruder::setHeatedBedTemperature(float temperatureInCelsius,bool beep)
     if(temperatureInCelsius > 15)
         pwm_pos[PWM_BOARD_FAN] = BOARD_FAN_SPEED;    // turn on the mainboard cooling fan
     else if(Printer::areAllSteppersDisabled())
-        pwm_pos[PWM_BOARD_FAN] = 0;      // turn off the mainboard cooling fan only if steppers disabled
+        pwm_pos[PWM_BOARD_FAN] = BOARD_FAN_MIN_SPEED;      // turn off the mainboard cooling fan only if steppers disabled
 #endif
 	EVENT_SET_BED_TEMP(temperatureInCelsius,beep);
 }
@@ -897,10 +987,15 @@ void Extruder::setMixingWeight(uint8_t extr,int weight)
     uint8_t i;
     mixingS = 0;
     extruder[extr].mixingW = weight;
+	float sum = 0;
+	for(fast8_t i = 0; i < NUM_EXTRUDER; i++) {
+	    sum += extruder[i].stepsPerMM * extruder[i].mixingW;                   // steps of virtual axis with original weights
+	}
     for(i=0; i<NUM_EXTRUDER; i++)
     {
-        extruder[i].mixingE = extruder[i].mixingW;
-        mixingS += extruder[i].mixingW;
+		extruder[i].mixingWB = static_cast<int>(10000.0*extruder[i].stepsPerMM*extruder[i].mixingW / sum);
+        extruder[i].mixingE = extruder[i].mixingWB;
+        mixingS += extruder[i].mixingWB;
     }
 }
 void Extruder::step()
@@ -966,32 +1061,32 @@ void Extruder::step()
     int bestError;
     if(mixingDir)
     {
-        bestError = -10000;
+        bestError = -20000;
         for(i = 0; i < NUM_EXTRUDER; i++)
         {
-            if(extruder[i].mixingW == 0) continue;
+            if(extruder[i].mixingWB == 0) continue;
             if(extruder[i].mixingE > bestError)
             {
                 bestError = extruder[i].mixingE;
                 best = i;
             }
-            extruder[i].mixingE += extruder[i].mixingW;
+            extruder[i].mixingE += extruder[i].mixingWB;
         }
         if(best == 255) return; // no extruder has weight!
         extruder[best].mixingE -= mixingS;
     }
     else
     {
-        bestError = 10000;
+        bestError = 20000;
         for(i = 0; i < NUM_EXTRUDER; i++)
         {
-            if(extruder[i].mixingW == 0) continue;
+            if(extruder[i].mixingWB == 0) continue;
             if(extruder[i].mixingE < bestError)
             {
                 bestError = extruder[i].mixingE;
                 best = i;
             }
-            extruder[i].mixingE -= extruder[i].mixingW;
+            extruder[i].mixingE -= extruder[i].mixingWB;
         }
         if(best == 255) return; // no extruder has weight!
         extruder[best].mixingE += mixingS;
@@ -1929,7 +2024,69 @@ const short temptable_14[NUMTEMPS_14][2] PROGMEM = {
 	{571*4,8*105}, {611*4,8*100}, {681*4,8*90}, {711*4,8*85}, {811*4,8*69}, {831*4,8*65}, {881*4,8*55}, 
 	{901*4,8*51},  {941*4,8*39}, {971*4,8*28}, {981*4,8*23}, {991*4,8*17}, {1001*4,8*9}, {1021*4,8*-27},{1023*4,8*-200}
 };
-	
+#define NUMTEMPS_15 27 // DYZE DESIGN 500°C Thermistor
+const short temptable_15[NUMTEMPS_15][2] PROGMEM =
+{
+   { 18 * 4, 850 * 8 },{ 18 * 4, 500 * 8 },{ 22 * 4, 480 * 8 },{ 27 * 4, 460 * 8 },{ 33 * 4, 440 * 8 },{ 41 * 4, 420 * 8 },{ 52 * 4, 400 * 8 },{ 68 * 4, 380 * 8 },{ 86 * 4, 360 * 8 },{ 112 * 4, 340 * 8 },
+   { 147 * 4, 320 * 8 },{ 194 * 4, 300 * 8 },{ 254 * 4, 280 * 8 },{ 330 * 4, 260 * 8 },{ 428 * 4, 240 * 8 },{ 533 * 4, 220 * 8 },{ 646 * 4, 200 * 8 },{ 754 * 4, 180 * 8 },{ 844 * 4, 160 * 8 },
+   { 912 * 4, 140 * 8 },{ 959 * 4, 120 * 8 },{ 989 * 4, 100 * 8 },{ 1007 * 4, 80 * 8 },{ 1016 * 4, 60 * 8 },{ 1021 * 4, 30 * 8 },{ 4091, 25 * 8 },{ 4092, 20 * 8 }
+};
+// Contributed by Brandon Coates - May 2015
+// B3 Innovations Pico 500c Thermistor
+// B150/250 = 5300 K +/- 3%
+// R 250 = 2.705k Ohms +/- 2.5%
+#define NUMTEMPS_16 49
+const short temptable_16[NUMTEMPS_16][2] PROGMEM = {
+	{  37 ,  510*8 },
+	{  44 ,  500*8 },
+	{  51 ,  490*8 },
+	{  58 ,  480*8 },
+	{  67 ,  470*8 },
+	{  77 ,  460*8 },
+	{  88 ,  450*8 },
+	{  99 ,  440*8 },
+	{  112 ,  430*8 },
+	{  126 ,  420*8 },
+	{  144 ,  410*8 },
+	{  163 ,  400*8 },
+	{  185 ,  390*8 },
+	{  210 ,  380*8 },
+	{  240 ,  370*8 },
+	{  273 ,  360*8 },
+	{  311 ,  350*8 },
+	{  355 ,  340*8 },
+	{  408 ,  330*8 },
+	{  470 ,  320*8 },
+	{  542 ,  310*8 },
+	{  623 ,  300*8 },
+	{  720 ,  290*8 },
+	{  832 ,  280*8 },
+	{  961 ,  270*8 },
+	{  1108 ,  260*8 },
+	{  1276 ,  250*8 },
+	{  1463 ,  240*8 },
+	{  1676 ,  230*8 },
+	{  1896 ,  220*8 },
+	{  2133 ,  210*8 },
+	{  2382 ,  200*8 },
+	{  2635 ,  190*8 },
+	{  2866 ,  180*8 },
+	{  3092 ,  170*8 },
+	{  3288 ,  160*8 },
+	{  3468 ,  150*8 },
+	{  3608 ,  140*8 },
+	{  3727 ,  130*8 },
+	{  3824 ,  120*8 },
+	{  3898 ,  110*8 },
+	{  3955 ,  100*8 },
+	{  4029 ,  80*8 },
+	{  4060 ,  65*8 },
+	{  4073 ,  55*8 },
+	{  4082 ,  45*8 },
+	{  4088 ,  35*8 },
+	{  4092 ,  25*8 },
+	{  4095 ,   0*8 },
+};	
 #if NUM_TEMPS_USERTHERMISTOR0 > 0
 const short temptable_5[NUM_TEMPS_USERTHERMISTOR0][2] PROGMEM = USER_THERMISTORTABLE0 ;
 #endif
@@ -1939,7 +2096,7 @@ const short temptable_6[NUM_TEMPS_USERTHERMISTOR1][2] PROGMEM = USER_THERMISTORT
 #if NUM_TEMPS_USERTHERMISTOR2 > 0
 const short temptable_7[NUM_TEMPS_USERTHERMISTOR2][2] PROGMEM = USER_THERMISTORTABLE2 ;
 #endif
-const short * const temptables[14] PROGMEM = {(short int *)&temptable_1[0][0],(short int *)&temptable_2[0][0],(short int *)&temptable_3[0][0],(short int *)&temptable_4[0][0]
+const short * const temptables[16] PROGMEM = {(short int *)&temptable_1[0][0],(short int *)&temptable_2[0][0],(short int *)&temptable_3[0][0],(short int *)&temptable_4[0][0]
 #if NUM_TEMPS_USERTHERMISTOR0 > 0
         ,(short int *)&temptable_5[0][0]
 #else
@@ -1962,9 +2119,11 @@ const short * const temptables[14] PROGMEM = {(short int *)&temptable_1[0][0],(s
         ,(short int *)&temptable_12[0][0]
         ,(short int *)&temptable_13[0][0]
         ,(short int *)&temptable_14[0][0]
+        ,(short int *)&temptable_15[0][0]
+        ,(short int *)&temptable_16[0][0]
                                              };
-const uint8_t temptables_num[14] PROGMEM = {NUMTEMPS_1,NUMTEMPS_2,NUMTEMPS_3,NUMTEMPS_4,NUM_TEMPS_USERTHERMISTOR0,NUM_TEMPS_USERTHERMISTOR1,NUM_TEMPS_USERTHERMISTOR2,NUMTEMPS_8,
-                                 NUMTEMPS_9,NUMTEMPS_10,NUMTEMPS_11,NUMTEMPS_12,NUMTEMPS_13,NUMTEMPS_14
+const uint8_t temptables_num[16] PROGMEM = {NUMTEMPS_1,NUMTEMPS_2,NUMTEMPS_3,NUMTEMPS_4,NUM_TEMPS_USERTHERMISTOR0,NUM_TEMPS_USERTHERMISTOR1,NUM_TEMPS_USERTHERMISTOR2,NUMTEMPS_8,
+                                 NUMTEMPS_9,NUMTEMPS_10,NUMTEMPS_11,NUMTEMPS_12,NUMTEMPS_13,NUMTEMPS_14,NUMTEMPS_15,NUMTEMPS_16
                                            };
 
 
@@ -1990,7 +2149,9 @@ void TemperatureController::updateCurrentTemperature()
     case 10:
     case 11:
     case 12:
-	case 14:
+    case 14:
+    case 15:
+	case 16:
     case 97:
     case 98:
     case 99:
@@ -2008,7 +2169,7 @@ void TemperatureController::updateCurrentTemperature()
 #endif
 #ifdef SUPPORT_MAX6675
     case 101: // MAX6675
-        currentTemperature = read_max6675(sensorPin);
+        currentTemperature = read_max6675(sensorPin,pwmIndex);
         break;
 #endif
 #ifdef SUPPORT_MAX31855
@@ -2038,7 +2199,9 @@ void TemperatureController::updateCurrentTemperature()
     case 10:
     case 11:
     case 12:
-	case 14:
+    case 14:
+    case 15:
+	case 16:
     {
         type--;
         uint8_t num = pgm_read_byte(&temptables_num[type]) << 1;
@@ -2229,7 +2392,7 @@ void TemperatureController::autotunePID(float temp,uint8_t controllerId,int maxC
         maxCycles = 20;
     Com::printInfoFLN(Com::tPIDAutotuneStart);
 
-    Extruder::disableAllHeater(); // switch off all heaters.
+    //Extruder::disableAllHeater(); // switch off all heaters.
     autotuneIndex = controllerId;
     pwm_pos[pwmIndex] = pidMax;
     if(controllerId<NUM_EXTRUDER)
@@ -2242,6 +2405,7 @@ void TemperatureController::autotunePID(float temp,uint8_t controllerId,int maxC
 #if FEATURE_WATCHDOG
         HAL::pingWatchdog();
 #endif // FEATURE_WATCHDOG
+		Commands::checkForPeriodicalActions(true); // update heaters etc.
 		GCode::keepAlive(WaitHeater);
         updateCurrentTemperature();
         currentTemp = currentTemperatureC;
@@ -2317,7 +2481,8 @@ void TemperatureController::autotunePID(float temp,uint8_t controllerId,int maxC
         if(currentTemp > (temp + 40))
         {
             Com::printErrorFLN(Com::tAPIDFailedHigh);
-            Extruder::disableAllHeater();
+            //Extruder::disableAllHeater();
+			autotuneIndex = 255;
             return;
         }
         if(time - temp_millis > 1000)
@@ -2328,13 +2493,15 @@ void TemperatureController::autotunePID(float temp,uint8_t controllerId,int maxC
         if(((time - t1) + (time - t2)) > (10L*60L*1000L*2L))   // 20 Minutes
         {
             Com::printErrorFLN(Com::tAPIDFailedTimeout);
-            Extruder::disableAllHeater();
+            //Extruder::disableAllHeater();
+			autotuneIndex = 255;
             return;
         }
         if(cycles > maxCycles)
         {
             Com::printInfoFLN(Com::tAPIDFinished);
-            Extruder::disableAllHeater();
+            //Extruder::disableAllHeater();
+			autotuneIndex = 255;
             if(storeValues)
             {
                 pidPGain = Kp;
@@ -2367,10 +2534,11 @@ bool reportTempsensorError()
     if(!Printer::isAnyTempsensorDefect()) return false;
     for(uint8_t i = 0; i < NUM_TEMPERATURE_LOOPS; i++)
     {
-        if(i == NUM_EXTRUDER) Com::printF(Com::tHeatedBed);
-#if HAVE_HEATED_BED		
-        else if(i == HEATED_BED_INDEX) Com::printF(Com::tExtruderSpace,i);
-#endif		
+#if HAVE_HEATED_BED
+        if(i == HEATED_BED_INDEX) Com::printF(Com::tHeatedBed);
+        else 
+#endif
+		if(i < NUM_EXTRUDER) Com::printF(Com::tExtruderSpace,i);
 		else Com::printF(PSTR("Other:"));
 		TemperatureController *act = tempController[i];
         int temp = act->currentTemperatureC;
@@ -2393,22 +2561,29 @@ bool reportTempsensorError()
 
 #ifdef SUPPORT_MAX6675
 
-int16_t read_max6675(uint8_t ss_pin)
+int16_t read_max6675(uint8_t ss_pin,fast8_t idx)
 {
-    static millis_t last_max6675_read = 0;
-    static int16_t max6675_temp = 0;
-    if (HAL::timeInMilliseconds() - last_max6675_read > 230)
+	static bool firstRun = true;
+    static millis_t last_max6675_read[NUM_PWM];
+    static int16_t max6675_temp[NUM_PWM];	
+	if(firstRun) {
+		for(fast8_t i=0;i<NUM_PWM;i++) {
+			last_max6675_read[i] = 0;			
+		}
+		firstRun = false;
+	}
+    if (HAL::timeInMilliseconds() - last_max6675_read[idx] > 230)
     {
         HAL::spiInit(2);
         HAL::digitalWrite(ss_pin, 0);  // enable TT_MAX6675
         HAL::delayMicroseconds(1);    // ensure 100ns delay - a bit extra is fine
-        max6675_temp = HAL::spiReceive(0);
-        max6675_temp <<= 8;
-        max6675_temp |= HAL::spiReceive(0);
+        max6675_temp[idx] = HAL::spiReceive(0);
+        max6675_temp[idx] <<= 8;
+        max6675_temp[idx] |= HAL::spiReceive(0);
         HAL::digitalWrite(ss_pin, 1);  // disable TT_MAX6675
-        last_max6675_read = HAL::timeInMilliseconds();
+        last_max6675_read[idx] = HAL::timeInMilliseconds();
     }
-    return max6675_temp & 4 ? 2000 : max6675_temp >> 3; // thermocouple open?
+    return max6675_temp[idx] & 4 ? 2000 : max6675_temp[idx] >> 3; // thermocouple open?
 }
 #endif
 #ifdef SUPPORT_MAX31855
@@ -2472,12 +2647,20 @@ void Extruder::retract(bool isRetract,bool isLong)
     int32_t zlift = static_cast<int32_t>(zLiftF * Printer::axisStepsPerMM[Z_AXIS]);
     if(isRetract && !isRetracted())
     {
+#ifdef EARLY_ZLIFT
+        if(zlift > 0) {
+	        PrintLine::moveRelativeDistanceInStepsReal(0,0,zlift,0,Printer::maxFeedrate[Z_AXIS], false);
+	        Printer::coordinateOffset[Z_AXIS] -= zLiftF;
+        }
+#endif
         retractDistance(distance);
         setRetracted(true);
+#ifndef EARLY_ZLIFT
         if(zlift > 0) {
             PrintLine::moveRelativeDistanceInStepsReal(0,0,zlift,0,Printer::maxFeedrate[Z_AXIS], false);
             Printer::coordinateOffset[Z_AXIS] -= zLiftF;
         }
+#endif
     }
     else if(!isRetract && isRetracted())
     {
@@ -2537,14 +2720,14 @@ Extruder extruder[NUM_EXTRUDER] =
         ,EXT0_ADVANCE_L,EXT0_ADVANCE_BACKLASH_STEPS
 #endif
 #if MIXING_EXTRUDER > 0
-        ,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
+        ,10,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
 #endif
         ,{
             0,EXT0_TEMPSENSOR_TYPE,EXT0_SENSOR_INDEX,EXT0_HEAT_MANAGER,0,0,0,0
 #if TEMP_PID
             ,0,EXT0_PID_INTEGRAL_DRIVE_MAX,EXT0_PID_INTEGRAL_DRIVE_MIN,EXT0_PID_PGAIN_OR_DEAD_TIME,EXT0_PID_I,EXT0_PID_D,EXT0_PID_MAX,0,0,0,{0,0,0,0}
 #endif
-            ,0,0,0,EXT0_DECOUPLE_TEST_PERIOD
+            ,0,0,0,EXT0_DECOUPLE_TEST_PERIOD,0
         }
         ,ext0_select_cmd,ext0_deselect_cmd,EXT0_EXTRUDER_COOLER_SPEED,0,0,0
 #if EXTRUDER_JAM_CONTROL
@@ -2564,14 +2747,14 @@ Extruder extruder[NUM_EXTRUDER] =
         ,EXT1_ADVANCE_L,EXT1_ADVANCE_BACKLASH_STEPS
 #endif
 #if MIXING_EXTRUDER > 0
-        ,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
+        ,10,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
 #endif
         ,{
             1,EXT1_TEMPSENSOR_TYPE,EXT1_SENSOR_INDEX,EXT1_HEAT_MANAGER,0,0,0,0
 #if TEMP_PID
             ,0,EXT1_PID_INTEGRAL_DRIVE_MAX,EXT1_PID_INTEGRAL_DRIVE_MIN,EXT1_PID_PGAIN_OR_DEAD_TIME,EXT1_PID_I,EXT1_PID_D,EXT1_PID_MAX,0,0,0,{0,0,0,0}
 #endif
-            ,0,0,0,EXT1_DECOUPLE_TEST_PERIOD
+            ,0,0,0,EXT1_DECOUPLE_TEST_PERIOD,0
         }
         ,ext1_select_cmd,ext1_deselect_cmd,EXT1_EXTRUDER_COOLER_SPEED,0,0,0
 #if EXTRUDER_JAM_CONTROL
@@ -2591,14 +2774,14 @@ Extruder extruder[NUM_EXTRUDER] =
         ,EXT2_ADVANCE_L,EXT2_ADVANCE_BACKLASH_STEPS
 #endif
 #if MIXING_EXTRUDER > 0
-        ,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
+        ,10,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
 #endif
         ,{
             2,EXT2_TEMPSENSOR_TYPE,EXT2_SENSOR_INDEX,EXT2_HEAT_MANAGER,0,0,0,0
 #if TEMP_PID
             ,0,EXT2_PID_INTEGRAL_DRIVE_MAX,EXT2_PID_INTEGRAL_DRIVE_MIN,EXT2_PID_PGAIN_OR_DEAD_TIME,EXT2_PID_I,EXT2_PID_D,EXT2_PID_MAX,0,0,0,{0,0,0,0}
 #endif
-            ,0,0,0,EXT2_DECOUPLE_TEST_PERIOD
+            ,0,0,0,EXT2_DECOUPLE_TEST_PERIOD,0
         }
         ,ext2_select_cmd,ext2_deselect_cmd,EXT2_EXTRUDER_COOLER_SPEED,0,0,0
 #if EXTRUDER_JAM_CONTROL
@@ -2618,14 +2801,14 @@ Extruder extruder[NUM_EXTRUDER] =
         ,EXT3_ADVANCE_L,EXT3_ADVANCE_BACKLASH_STEPS
 #endif
 #if MIXING_EXTRUDER > 0
-        ,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
+        ,10,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
 #endif
         ,{
             3,EXT3_TEMPSENSOR_TYPE,EXT3_SENSOR_INDEX,EXT3_HEAT_MANAGER,0,0,0,0
 #if TEMP_PID
             ,0,EXT3_PID_INTEGRAL_DRIVE_MAX,EXT3_PID_INTEGRAL_DRIVE_MIN,EXT3_PID_PGAIN_OR_DEAD_TIME,EXT3_PID_I,EXT3_PID_D,EXT3_PID_MAX,0,0,0,{0,0,0,0}
 #endif
-            ,0,0,0,EXT3_DECOUPLE_TEST_PERIOD
+            ,0,0,0,EXT3_DECOUPLE_TEST_PERIOD,0
         }
         ,ext3_select_cmd,ext3_deselect_cmd,EXT3_EXTRUDER_COOLER_SPEED,0,0,0
 #if EXTRUDER_JAM_CONTROL
@@ -2645,14 +2828,14 @@ Extruder extruder[NUM_EXTRUDER] =
         ,EXT4_ADVANCE_L,EXT4_ADVANCE_BACKLASH_STEPS
 #endif
 #if MIXING_EXTRUDER > 0
-        ,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
+        ,10,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
 #endif
         ,{
             4,EXT4_TEMPSENSOR_TYPE,EXT4_SENSOR_INDEX,EXT4_HEAT_MANAGER,0,0,0,0
 #if TEMP_PID
             ,0,EXT4_PID_INTEGRAL_DRIVE_MAX,EXT4_PID_INTEGRAL_DRIVE_MIN,EXT4_PID_PGAIN_OR_DEAD_TIME,EXT4_PID_I,EXT4_PID_D,EXT4_PID_MAX,0,0,0,{0,0,0,0}
 #endif
-            ,0,0,0,EXT4_DECOUPLE_TEST_PERIOD
+            ,0,0,0,EXT4_DECOUPLE_TEST_PERIOD,0
         }
         ,ext4_select_cmd,ext4_deselect_cmd,EXT4_EXTRUDER_COOLER_SPEED,0,0,0
 #if EXTRUDER_JAM_CONTROL
@@ -2672,14 +2855,14 @@ Extruder extruder[NUM_EXTRUDER] =
         ,EXT5_ADVANCE_L,EXT5_ADVANCE_BACKLASH_STEPS
 #endif
 #if MIXING_EXTRUDER > 0
-        ,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
+        ,10,10,10,{10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10}
 #endif
         ,{
             5,EXT5_TEMPSENSOR_TYPE,EXT5_SENSOR_INDEX,EXT5_HEAT_MANAGER,0,0,0,0
 #if TEMP_PID
             ,0,EXT5_PID_INTEGRAL_DRIVE_MAX,EXT5_PID_INTEGRAL_DRIVE_MIN,EXT5_PID_PGAIN_OR_DEAD_TIME,EXT5_PID_I,EXT5_PID_D,EXT5_PID_MAX,0,0,0,{0,0,0,0}
 #endif
-            ,0,0,0,EXT5_DECOUPLE_TEST_PERIOD
+            ,0,0,0,EXT5_DECOUPLE_TEST_PERIOD,0
         }
         ,ext5_select_cmd,ext5_deselect_cmd,EXT5_EXTRUDER_COOLER_SPEED,0,0,0
 #if EXTRUDER_JAM_CONTROL
@@ -2695,7 +2878,7 @@ TemperatureController heatedBedController = {PWM_HEATED_BED,HEATED_BED_SENSOR_TY
 #if TEMP_PID
         ,0,HEATED_BED_PID_INTEGRAL_DRIVE_MAX,HEATED_BED_PID_INTEGRAL_DRIVE_MIN,HEATED_BED_PID_PGAIN_OR_DEAD_TIME,HEATED_BED_PID_IGAIN,HEATED_BED_PID_DGAIN,HEATED_BED_PID_MAX,0,0,0,{0,0,0,0}
 #endif
-        ,0,0,0,HEATED_BED_DECOUPLE_TEST_PERIOD};
+        ,0,0,0,HEATED_BED_DECOUPLE_TEST_PERIOD,0};
 #endif
 
 #if FAN_THERMO_PIN > -1
@@ -2703,7 +2886,7 @@ TemperatureController thermoController = {PWM_FAN_THERMO,FAN_THERMO_THERMISTOR_T
 	#if TEMP_PID
 	,0,255,0,10,1,1,255,0,0,0,{0,0,0,0}
 	#endif
-,0,0,0,0};
+,0,0,0,0,0};
 #endif
 
 #if NUM_TEMPERATURE_LOOPS > 0

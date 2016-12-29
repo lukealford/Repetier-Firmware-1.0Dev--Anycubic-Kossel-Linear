@@ -28,6 +28,7 @@
 #define DISPLAY_ARDUINO_LIB  4
 #define DISPLAY_U8G  5
 #define DISPLAY_GAMEDUINO2 6
+#define DISPLAY_SR 7
 
 /**
   What display type do you use?
@@ -39,6 +40,8 @@
     IMPORTANT: You need to uncomment the LiquidCrystal include in Repetier.pde for it to work.
                If you have Sanguino and want to use the library, you need to have Arduino 023 or older. (13.04.2012)
   5 = U8G supported display
+  6 = Gameduino2 display
+  7 = LCD Display via shift register (2 or 3 wire connection: DATA/EN, CLOCK, ENABLE/-1)
 */
 
 // ----------------------------------------------------------------------------
@@ -581,6 +584,7 @@ class UIDisplay {
       addFloat(number, -9, 2);
     };
     void addStringP(PGM_P text);
+    void addString(char* text);
     void addStringOnOff(uint8_t);
     void addChar(const char c);
     void addGCode(GCode *code);
@@ -659,8 +663,6 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_FONT_DEFAULT repetier_6x10
 #define UI_FONT_SMALL repetier_5x7
 #define UI_FONT_SMALL_WIDTH 5 //smaller font for status display
-#undef UI_ANIMATION
-#define UI_ANIMATION 0  // Animations are too slow
 #endif
 
 //calculate rows and cols available with current font
@@ -819,6 +821,28 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_VOLTAGE_LEVEL 1 // Set 1=5 o 0=3.3 V
 #endif
 
+#elif ((MOTHERBOARD == 410) || (MOTHERBOARD == 411))	// DUE3DOM / DUE3DOM MINI has own pins layout
+
+#undef BEEPER_PIN
+#define BEEPER_PIN             41
+#define UI_DISPLAY_RS_PIN      42
+#define UI_DISPLAY_ENABLE_PIN  43
+#define UI_DISPLAY_D4_PIN      44
+#define UI_DISPLAY_D5_PIN      45
+#define UI_DISPLAY_D6_PIN      46
+#define UI_DISPLAY_D7_PIN      47
+#define UI_ENCODER_A           52
+#define UI_ENCODER_B           50
+#define UI_ENCODER_CLICK       48
+#define UI_RESET_PIN           -1
+#undef SDCARDDETECT
+#define SDCARDDETECT           14
+#undef SDCARDDETECTINVERTED
+#define SDCARDDETECTINVERTED   0
+#ifndef UI_VOLTAGE_LEVEL
+#define UI_VOLTAGE_LEVEL 1 // Set 1=5 o 0=3.3 V
+#endif
+
 #elif MOTHERBOARD == CONTROLLER_FELIX_DUE
 
 #undef BEEPER_PIN
@@ -830,6 +854,27 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_ENCODER_B           50
 #define UI_ENCODER_CLICK       48
 #define UI_RESET_PIN           -1
+
+#elif ( MOTHERBOARD == 183 ) || ( MOTHERBOARD == 184 ) // MJRice Pica
+
+#undef BEEPER_PIN
+#define BEEPER_PIN 19
+#define UI_DISPLAY_RS_PIN 33
+#define UI_DISPLAY_RW_PIN -1
+#define UI_DISPLAY_ENABLE_PIN 30
+#define UI_DISPLAY_D0_PIN -1
+#define UI_DISPLAY_D1_PIN -1
+#define UI_DISPLAY_D2_PIN -1
+#define UI_DISPLAY_D3_PIN -1
+#define UI_DISPLAY_D4_PIN 35
+#define UI_DISPLAY_D5_PIN 32
+#define UI_DISPLAY_D6_PIN 37
+#define UI_DISPLAY_D7_PIN 36
+#define UI_ENCODER_A 47
+#define UI_ENCODER_B 48
+#define UI_ENCODER_CLICK 31
+#define UI_RESET_PIN -1
+#define SDCARDDETECT 49
 
 #else  // RAMPS
 #undef BEEPER_PIN
@@ -1587,8 +1632,6 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_FONT_DEFAULT repetier_6x10
 #define UI_FONT_SMALL repetier_5x7
 #define UI_FONT_SMALL_WIDTH 5 //smaller font for status display
-#undef UI_ANIMATION
-#define UI_ANIMATION 0  // Animations are too slow
 #endif
 
 #ifdef UI_MAIN
@@ -1657,7 +1700,7 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #endif // CONTROLLER_GATE_3NOVATICA
 
 #if FEATURE_CONTROLLER == CONTROLLER_SPARKLCD || FEATURE_CONTROLLER == CONTROLLER_SPARKLCD_ADAPTER
-#if MOTHERBOARD != 402
+#if MOTHERBOARD != 402 && MOTHERBOARD != 412
 #error This config only works with RADDS motherboard!
 #endif
 #define UI_DISPLAY_CHARSET 3
@@ -1674,8 +1717,6 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_FONT_DEFAULT repetier_6x10
 #define UI_FONT_SMALL repetier_5x7
 #define UI_FONT_SMALL_WIDTH 5 //smaller font for status display
-#undef UI_ANIMATION
-#define UI_ANIMATION 0  // Animations are too slow
 #define UI_DELAYPERCHAR		  50
 #define UI_HAS_KEYS 1
 #define UI_HAS_BACK_KEY 0
@@ -1695,6 +1736,19 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_DISPLAY_D7_PIN		-1
 
 #if FEATURE_CONTROLLER == CONTROLLER_SPARKLCD
+#if MOTHERBOARD == 412 // STACKER 3d Superboard
+// PINK.1, 88, D_RS
+#define UI_DISPLAY_RS_PIN		29
+#define UI_DISPLAY_RW_PIN		-1
+// PINK.3, 86, D_E
+#define UI_DISPLAY_ENABLE_PIN	25
+// PINF.5, 92, D_D4
+// PINF.5, 92, D_D4
+#define UI_DISPLAY_D4_PIN		27
+#define UI_ENCODER_A 35
+#define UI_ENCODER_B 33
+#define UI_ENCODER_CLICK 37
+#else
 // PINK.1, 88, D_RS
 #define UI_DISPLAY_RS_PIN		25
 #define UI_DISPLAY_RW_PIN		-1
@@ -1706,6 +1760,7 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_ENCODER_A 35
 #define UI_ENCODER_B 33
 #define UI_ENCODER_CLICK 37
+#endif
 #else
 // PINK.1, 88, D_RS
 #define UI_DISPLAY_RS_PIN		44
@@ -1713,8 +1768,8 @@ void uiCheckSlowKeys(uint16_t &action) {}
 // PINK.3, 86, D_E
 #define UI_DISPLAY_ENABLE_PIN	       45
 #define UI_DISPLAY_D4_PIN		46
-#define UI_ENCODER_A 52
-#define UI_ENCODER_B 50
+#define UI_ENCODER_A 50
+#define UI_ENCODER_B 52
 #define UI_ENCODER_CLICK 48
 #endif
 
@@ -1749,8 +1804,6 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_FONT_DEFAULT repetier_6x10
 #define UI_FONT_SMALL repetier_5x7
 #define UI_FONT_SMALL_WIDTH 5 //smaller font for status display
-#undef UI_ANIMATION
-#define UI_ANIMATION 0  // Animations are too slow
 
 //calculate rows and cols available with current font
 #define UI_COLS (UI_LCD_WIDTH/UI_FONT_WIDTH)
@@ -1962,10 +2015,15 @@ void uiCheckSlowKeys(uint16_t &action) {}
 //#define ADC_KEYPAD_PIN         1    // A1 (D30, analog numbering)
 
 // Display
+// Define UI_DISPLAY_TYPE = DISPLAY_SR with pins to override default settings
+// that work for original Zonestar hardware.
+// For instance:
+//   #define UI_DISPLAY_TYPE        DISPLAY_SR
+//   #define UI_DISPLAY_DATA_PIN    29
+//   #define UI_DISPLAY_CLOCK_PIN   28
+//   #define UI_DISPLAY_ENABLE_PIN  -1 // for 2-wire or pin number for 3-wire
+#ifndef UI_DISPLAY_TYPE
 #define UI_DISPLAY_TYPE          DISPLAY_4BIT
-#define UI_DISPLAY_CHARSET       1
-#define UI_COLS                  20
-#define UI_ROWS                  4
 
 #define UI_DISPLAY_ENABLE_PIN    29    // A2
 #define UI_DISPLAY_RS_PIN        28    // A3
@@ -1974,6 +2032,11 @@ void uiCheckSlowKeys(uint16_t &action) {}
 #define UI_DISPLAY_D5_PIN        11
 #define UI_DISPLAY_D6_PIN        16
 #define UI_DISPLAY_D7_PIN        17
+#endif
+
+#define UI_DISPLAY_CHARSET       1
+#define UI_COLS                  20
+#define UI_ROWS                  4
 
 // UI
 #define UI_HAS_KEYS              1

@@ -143,6 +143,7 @@ void Commands::printCurrentPosition(FSTRINGPARAM(s)) {
 }
 
 void Commands::printTemperatures(bool showRaw) {
+	int error;
 #if NUM_EXTRUDER > 0
     float temp = Extruder::current->tempControl.currentTemperatureC;
 #if HEATED_BED_SENSOR_TYPE == 0
@@ -154,6 +155,9 @@ void Commands::printTemperatures(bool showRaw) {
 #if HAVE_HEATED_BED
     Com::printF(Com::tSpaceBColon,Extruder::getHeatedBedTemperature());
     Com::printF(Com::tSpaceSlash,heatedBedController.targetTemperatureC,0);
+	if((error = heatedBedController.errorState()) > 0) {
+		Com::printF(PSTR(" DB:"),error);
+	}
     if(showRaw) {
         Com::printF(Com::tSpaceRaw,(int)NUM_EXTRUDER);
         Com::printF(Com::tColon,(1023 << (2 - ANALOG_REDUCE_BITS)) - heatedBedController.currentTemperature);
@@ -173,12 +177,19 @@ void Commands::printTemperatures(bool showRaw) {
         Com::printF(Com::tSpaceAt,(int)i);
         Com::printF(Com::tColon,(pwm_pos[extruder[i].tempControl.pwmIndex])); // Show output of autotune when tuning!
 #endif
+		if((error = extruder[i].tempControl.errorState()) > 0) {
+			Com::printF(PSTR(" D"),(int)i);
+			Com::printF(Com::tColon,error);
+		}
         if(showRaw) {
             Com::printF(Com::tSpaceRaw,(int)i);
             Com::printF(Com::tColon,(1023 << (2 - ANALOG_REDUCE_BITS)) - extruder[i].tempControl.currentTemperature);
         }
     }
-#elif NUM_EXTRUDER == 1
+#elif NUM_EXTRUDER == 1 || MIXING_EXTRUDER
+	if((error = extruder[0].tempControl.errorState()) > 0) {
+		Com::printF(PSTR(" D0:"),error);
+	}
     if(showRaw) {
         Com::printF(Com::tSpaceRaw,(int)0);
         Com::printF(Com::tColon,(1023 << (2 - ANALOG_REDUCE_BITS)) - extruder[0].tempControl.currentTemperature);
@@ -908,19 +919,7 @@ void Commands::processGCode(GCode *com) {
 #if ARC_SUPPORT
         case 2: // CW Arc
         case 3: // CCW Arc MOTION_MODE_CW_ARC: case MOTION_MODE_CCW_ARC:
-#if defined(SUPPORT_LASER) && SUPPORT_LASER
-            {
-                // disable laser for G0 moves
-                bool laserOn = LaserDriver::laserOn;
-                if(com->G == 0 && Printer::mode == PRINTER_MODE_LASER) {
-                    LaserDriver::laserOn = false;
-                }
-#endif // defined
                 processArc(com);
-#if defined(SUPPORT_LASER) && SUPPORT_LASER
-                LaserDriver::laserOn = laserOn;
-            }
-#endif // defined
             break;
 #endif
         case 4: // G4 dwell
@@ -935,7 +934,7 @@ void Commands::processGCode(GCode *com) {
             }
             break;
 #if FEATURE_RETRACTION && NUM_EXTRUDER > 0
-        case 10: // G10 S<1 = long retract, 0 = short retract = default> retracts filament accoriding to stored setting
+        case 10: // G10 S<1 = long retract, 0 = short retract = default> retracts filament according to stored setting
 #if NUM_EXTRUDER > 1
             Extruder::current->retract(true, com->hasS() && com->S > 0);
 #else
@@ -956,20 +955,12 @@ void Commands::processGCode(GCode *com) {
         case 21: // G21 Units to mm
             Printer::unitIsInches = 0;
             break;
-        case 28: { //G28 Home all Axis one at a time
-#if defined(SUPPORT_LASER) && SUPPORT_LASER
-				bool oldLaser = LaserDriver::laserOn;
-			    LaserDriver::laserOn = false;
-#endif				
+        case 28: { //G28 Home all Axis one at a time		
                 uint8_t homeAllAxis = (com->hasNoXYZ() && !com->hasE());
                 if(com->hasE())
                     Printer::currentPositionSteps[E_AXIS] = 0;
                 if(homeAllAxis || !com->hasNoXYZ())
                     Printer::homeAxis(homeAllAxis || com->hasX(),homeAllAxis || com->hasY(),homeAllAxis || com->hasZ());
-#if defined(SUPPORT_LASER) && SUPPORT_LASER
-			    LaserDriver::laserOn = oldLaser;
-#endif
-                Printer::updateCurrentPosition();
             }
             break;
 #if FEATURE_Z_PROBE
@@ -1071,7 +1062,7 @@ void Commands::processGCode(GCode *com) {
 			{ // G30 single probe set Z0
                 uint8_t p = (com->hasP() ? (uint8_t)com->P : 3);
                 if(Printer::runZProbe(p & 1,p & 2) == ILLEGAL_Z_PROBE) {
-					GCode::fatalError(PSTR("G29 leveling failed!"));
+					GCode::fatalError(PSTR("G30 probing failed!"));
 					break;
 				}
                 Printer::updateCurrentPosition(p & 1);
@@ -1199,7 +1190,7 @@ void Commands::processGCode(GCode *com) {
                 if(com->hasZ()) zOff = Printer::convertToMM(com->Z) - Printer::currentPosition[Z_AXIS];
                 Printer::setOrigin(xOff, yOff, zOff);
                 if(com->hasE()) {
-                    Printer::currentPositionSteps[E_AXIS] = Printer::convertToMM(com->E) * Printer::axisStepsPerMM[E_AXIS];
+                    Printer::destinationSteps[E_AXIS] = Printer::currentPositionSteps[E_AXIS] = Printer::convertToMM(com->E) * Printer::axisStepsPerMM[E_AXIS];
                 }
             }
             break;
@@ -1231,7 +1222,7 @@ void Commands::processGCode(GCode *com) {
                             if(Printer::isLargeMachine()) {
                                 // calculate radius assuming we are at surface
                                 // If Z is greater than 0 it will get calculated out for correct radius
-                                // Use either A or B tower as they acnhor x cartesian axis and always have
+                                // Use either A or B tower as they anchor x Cartesian axis and always have
                                 // Radius distance to center in simplest set up.
                                 float h = Printer::deltaDiagonalStepsSquaredB.f;
                                 unsigned long bSteps = Printer::currentNonlinearPositionSteps[B_TOWER];
@@ -1244,7 +1235,7 @@ void Commands::processGCode(GCode *com) {
                             } else {
                                 // calculate radius assuming we are at surface
                                 // If Z is greater than 0 it will get calculated out for correct radius
-                                // Use either A or B tower as they acnhor x cartesian axis and always have
+                                // Use either A or B tower as they anchor x Cartesian axis and always have
                                 // Radius distance to center in simplest set up.
                                 unsigned long h = Printer::deltaDiagonalStepsSquaredB.l;
                                 unsigned long bSteps = Printer::currentNonlinearPositionSteps[B_TOWER];
@@ -1301,10 +1292,10 @@ void Commands::processGCode(GCode *com) {
                 Printer::coordinateOffset[X_AXIS] = 0;
                 Printer::coordinateOffset[Y_AXIS] = 0;
                 Printer::coordinateOffset[Z_AXIS] = 0;
-                // I think this is coded incorrectly, as it depends on the biginning position of the
+                // I think this is coded incorrectly, as it depends on the start position of the
                 // of the hot end, and so should first move to x,y,z= 0,0,0, but as that may not
                 // be possible if the printer is not in the homes/zeroed state, the printer
-                // cannot safely move to 0 z coordinate without crashong into the print surface.
+                // cannot safely move to 0 z coordinate without crashing into the print surface.
                 // so other than commenting, I'm not meddling.
                 // but you will always get different counts from different positions.
                 Printer::deltaMoveToTopEndstops(Printer::homingFeedrate[Z_AXIS]);
@@ -1748,22 +1739,17 @@ void Commands::processMCode(GCode *com) {
                 if(abs(heatedBedController.currentTemperatureC - heatedBedController.targetTemperatureC) < SKIP_M190_IF_WITHIN) break;
 #endif
                 EVENT_WAITING_HEATER(-1);
-                uint32_t codenum; //throw away variable
-                codenum = HAL::timeInMilliseconds();
-                while(heatedBedController.currentTemperatureC + 0.5 < heatedBedController.targetTemperatureC && heatedBedController.targetTemperatureC > 25.0) {
-                    if( (HAL::timeInMilliseconds() - codenum) > 1000 ) { //Print Temp Reading every 1 second while heating up.
-                        printTemperatures();
-                        codenum = previousMillisCmd = HAL::timeInMilliseconds();
-                    }
-                    Commands::checkForPeriodicalActions(true);
-					GCode::keepAlive(WaitHeater);
-                }
+                tempController[HEATED_BED_INDEX]->waitForTargetTemperature();
 #endif
                 EVENT_HEATING_FINISHED(-1);
 #endif
                 UI_CLEAR_STATUS;
                 previousMillisCmd = HAL::timeInMilliseconds();
             }
+            break;
+        case 155: // M155 S<1/0> Enable/disable auto report temperatures. When enabled firmware will emit temperatures every second.
+            Printer::setAutoreportTemp((com->hasS() && com->S != 0) || !com->hasS() );
+            Printer::lastTempReport = HAL::timeInMilliseconds();
             break;
 #if NUM_TEMPERATURE_LOOPS > 0
         case 116: // Wait for temperatures to reach target temperature
@@ -1784,10 +1770,12 @@ void Commands::processMCode(GCode *com) {
             }
             break;
         case 107: // M107 Fan Off
-            if(com->hasP() && com->P == 1)
-                setFan2Speed(0);
-            else
-                setFanSpeed(0);
+            if(!(Printer::flag2 & PRINTER_FLAG2_IGNORE_M106_COMMAND)) {
+	            if(com->hasP() && com->P == 1)
+		            setFan2Speed(0);
+			    else
+				    setFanSpeed(0);
+			}
             break;
 #endif
         case 111: // M111 enable/disable run time debug flags
@@ -1810,15 +1798,55 @@ void Commands::processMCode(GCode *com) {
             break;
         case 115: // M115
             Com::printFLN(Com::tFirmware);
+#if FEATURE_CONTROLLER != NO_CONTROLLER
+            Com::cap(PSTR("PROGRESS:1"));
+#else
+            Com::cap(PSTR("PROGRESS:0"));
+#endif
+            Com::cap(PSTR("AUTOREPORT_TEMP:1"));
+#if EEPROM_MODE != 0
+            Com::cap(PSTR("EEPROM:0"));
+#else
+            Com::cap(PSTR("EEPROM:1"));
+#endif
+#if FEATURE_AUTOLEVEL && FEATURE_Z_PROBE
+            Com::cap(PSTR("AUTOLEVEL:1"));
+#else
+            Com::cap(PSTR("AUTOLEVEL:0"));
+#endif
+#if FEATURE_Z_PROBE
+            Com::cap(PSTR("Z_PROBE:1"));
+#else
+            Com::cap(PSTR("Z_PROBE:0"));
+#endif
+#if PS_ON_PIN>-1
+            Com::cap(PSTR("SOFTWARE_POWER:1"));
+#else
+            Com::cap(PSTR("SOFTWARE_POWER:0"));
+#endif
+#if CASE_LIGHTS_PIN > -1
+            Com::cap(PSTR("TOGGLE_LIGHTS:1"));
+#else
+            Com::cap(PSTR("TOGGLE_LIGHTS:0"));
+#endif
             reportPrinterUsage();
             Printer::reportPrinterMode();
             break;
         case 114: // M114
             printCurrentPosition(PSTR("M114 "));
+			if(com->hasS() && com->S) {
+				Com::printF(PSTR("XS:"),Printer::currentPositionSteps[X_AXIS]);
+				Com::printF(PSTR(" YS:"),Printer::currentPositionSteps[Y_AXIS]);
+				Com::printFLN(PSTR(" ZS:"),Printer::currentPositionSteps[Z_AXIS]);
+			}
             break;
         case 117: // M117 message to lcd
             if(com->hasString()) {
                 UI_STATUS_UPD_RAM(com->text);
+#if JSON_OUTPUT && defined(WRITE_MESSAGES_To_JSON)
+				Com::printF(PSTR("{\"message\":\""),com->text);
+				Com::printFLN(PSTR("\"}"));
+#endif				
             }
             break;
         case 119: // M119
@@ -2063,7 +2091,7 @@ void Commands::processMCode(GCode *com) {
             }
             break;
 #endif
-        case 302: // M302 S<0 or 1> - allow cold extrusion. Without S parameter it will allow. S1 will disallow.
+        case 302: // M302 S<0 or 1> - allow cold extrusion. Without S parameter it will allow. S1 will allow, S0 will disallow.
             Printer::setColdExtrusionAllowed(!com->hasS() || (com->hasS() && com->S != 0));
             break;
         case 303: { // M303
@@ -2096,7 +2124,7 @@ void Commands::processMCode(GCode *com) {
                 EEPROM::storeDataIntoEEPROM();
             }
             break;
-        case 322: // M322 Reset autoeveling matrix
+        case 322: // M322 Reset auto leveling matrix
             Printer::resetTransformationMatrix(false);
             if(com->hasS() && com->S) {
                 EEPROM::storeDataIntoEEPROM();
@@ -2168,17 +2196,20 @@ void Commands::processMCode(GCode *com) {
             Printer::reportPrinterMode();
             break;
         case 451:
+			waitUntilEndOfAllMoves();
             Printer::mode = PRINTER_MODE_FFF;
             Printer::reportPrinterMode();
             break;
         case 452:
 #if defined(SUPPORT_LASER) && SUPPORT_LASER
+			waitUntilEndOfAllMoves();
             Printer::mode = PRINTER_MODE_LASER;
 #endif
             Printer::reportPrinterMode();
             break;
         case 453:
 #if defined(SUPPORT_CNC) && SUPPORT_CNC
+			waitUntilEndOfAllMoves();
             Printer::mode = PRINTER_MODE_CNC;
 #endif
             Printer::reportPrinterMode();
@@ -2223,6 +2254,31 @@ void Commands::processMCode(GCode *com) {
             Extruder::markAllUnjammed();
             break;
 #endif // EXTRUDER_JAM_CONTROL
+//- M530 S<printing> L<layer> - Enables explicit printing mode (S1) or disables it (S0). L can set layer count
+        case 530:
+            if(com->hasL())
+                Printer::maxLayer = static_cast<int>(com->L);
+            if(com->hasS())
+                Printer::setPrinting(static_cast<uint8_t>(com->S));
+            else
+                Printer::setPrinting(0);
+            break;
+//- M531 filename - Define filename being printed
+        case 531:
+            strncpy(Printer::printName,com->text,20);
+            Printer::printName[20] = 0;
+            break;
+//- M532 X<percent> L<curLayer> - update current print state progress (X=0..100) and layer L
+        case 532:
+            if(com->hasX())
+                Printer::progress = com->X;
+                if(Printer::progress > 100.0)
+                    Printer::progress = 100.0;
+                else if(Printer::progress < 0)
+                    Printer::progress = 0;
+            if(com->hasL())
+                Printer::currentLayer = static_cast<int>(com->L);
+            break;
 #ifdef DEBUG_QUEUE_MOVE
         case 533: { // M533 Write move data
                 InterruptProtectedBlock noInts;

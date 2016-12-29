@@ -48,6 +48,10 @@ Implemented Codes
 - G30 P<0..3> - Single z-probe at current position P = 1 first measurement, P = 2 Last measurement P = 0 or 3 first and last measurement
 - G31 - Write signal of probe sensor
 - G32 S<0..2> P<0..1> - Autolevel print bed. S = 1 measure zLength, S = 2 Measure and store new zLength
+- G33 - Measure distortion map
+- G33 R0 - delete distortion map
+- G33 L0 - List distortion map
+- G33 X<xpos> Y<ypos> Z<newdistortioncorrection> - Set new distortion for nearest distortion point.
 - G90 - Use absolute coordinates
 - G91 - Use relative coordinates
 - G92 - Set current position to coordinates given
@@ -55,6 +59,10 @@ Implemented Codes
 - G132 - calibrate endstop positions. Call this, after calling G131 and after centering the extruder holder.
 - G133 - measure steps until max endstops for deltas. Can be used to detect lost steps within tolerances of endstops.
 - G134 Px Sx Zx - Calibrate nozzle height difference (need z probe in nozzle!) Px = reference extruder, Sx = only measure extrude x against reference, Zx = add to measured z distance for Sx for correction.
+- G201 P<motorId> X<pos>     - Go to position X with motor X
+- G202 P<motorId> X<setpos>  - Mark current position as X
+- G203 P<motorId>            - Report current motor position
+- G204 P<motorId> S<0/1>     - Enable/disable motor
 
 RepRap M Codes
 
@@ -63,7 +71,7 @@ RepRap M Codes
 - M106 S<speed> P<fan> - Fan on speed = 0..255, P = 0 or 1, 0 is default and can be omitted
 - M107 P<fan> - Fan off, P = 0 or 1, 0 is default and can be omitted
 - M109 - Wait for extruder current temp to reach target temp.
-- M114 - Display current position
+- M114 S1 - Display current position, S1 = also write position in steps
 
 Custom M Codes
 
@@ -100,13 +108,14 @@ Custom M Codes
 - M117 <message> - Write message in status row on lcd
 - M119 - Report endstop status
 - M140 S<temp> F1 - Set bed target temp, F1 makes a beep when temperature is reached the first time
+- M155 S<1/0> Enable/disable auto report temperatures. When enabled firmware will emit temperatures every second.
 - M163 S<extruderNum> P<weight>  - Set weight for this mixing extruder drive
 - M164 S<virtNum> P<0 = dont store eeprom,1 = store to eeprom> - Store weights as virtual extruder S
 - M190 - Wait for bed current temp to reach target temp.
 - M200 T<extruder> D<diameter> - Use volumetric extrusion. Set D0 or omit D to disable volumetric extr. Omit T for current extruder.
 - M201 - Set max acceleration in units/s^2 for print moves (M201 X1000 Y1000)
 - M202 - Set max acceleration in units/s^2 for travel moves (M202 X1000 Y1000)
-- M203 - Set temperture monitor to Sx
+- M203 - Set temperature monitor to Sx
 - M204 - Set PID parameter X => Kp Y => Ki Z => Kd S<extruder> Default is current extruder. NUM_EXTRUDER=Heated bed
 - M205 - Output EEPROM settings
 - M206 - Set EEPROM value
@@ -129,12 +138,13 @@ Custom M Codes
 - M322 - Reset autolevel matrix
 - M323 S0/S1 enable disable distortion correction P0 = not permanent, P1 = permanent = default
 - M340 P<servoId> S<pulseInUS> R<autoOffIn ms>: servoID = 0..3, Servos are controlled by a pulse with normally between 500 and 2500 with 1500ms in center position. 0 turns servo off. R allows automatic disabling after a while.
-- M350 S<mstepsAll> X<mstepsX> Y<mstepsY> Z<mstepsZ> E<mstepsE0> P<mstespE1> : Set microstepping on RAMBO board
+- M350 S<mstepsAll> X<mstepsX> Y<mstepsY> Z<mstepsZ> E<mstepsE0> P<mstespE1> : Set micro stepping on RAMBO board
 - M355 S<0/1> - Turn case light on/off, no S = report status
 - M360 - show configuration
 - M400 - Wait until move buffers empty.
 - M401 - Store x, y and z position.
 - M402 - Go to stored position. If X, Y or Z is specified, only these coordinates are used. F changes feedrate for that move.
+- M408 S<0-5> - Return status as json string (requires matching feature) for PanelDue
 - M450 - Reports printer mode
 - M451 - Set printer mode to FFF
 - M452 - Set printer mode to laser
@@ -143,6 +153,9 @@ Custom M Codes
 - M500 Store settings to EEPROM
 - M501 Load settings from EEPROM
 - M502 Reset settings to the one in configuration.h. Does not store values in EEPROM!
+- M530 S<printing> L<layer> - Enables explicit printing mode (S1) or disables it (S0). L can set layer count
+- M531 filename - Define filename being printed
+- M532 X<percent> L<curLayer> - update current print state progress (X=0..100) and layer L
 - M513 - Clear all jam marker.
 - M600 Change filament
 - M601 S<1/0> - Pause extruders. Paused extrudes disable heaters and motor. Unpausing reheats extruder to old temp.

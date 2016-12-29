@@ -18,6 +18,17 @@
 
 #define UI_MAIN 1
 #include "Repetier.h"
+
+#define UI_ROWS_EXTRA 0
+#if UI_DISPLAY_TYPE == DISPLAY_U8G
+#if defined(UI_HEAD)
+#undef UI_ROWS
+#define UI_ROWS (UI_LCD_HEIGHT/UI_FONT_HEIGHT)-1
+#undef UI_ROWS_EXTRA
+#define UI_ROWS_EXTRA 1
+#endif
+#endif
+
 // The uimenu.h declares static variables of menus, which must be declared only once.
 // It does not define interfaces for other modules, so should never be included elsewhere
 #include "uimenu.h"
@@ -27,6 +38,7 @@ extern const int8_t encoder_table[16] PROGMEM ;
 #include <stdlib.h>
 #include <inttypes.h>
 #include <ctype.h>
+
 
 #if FEATURE_SERVO > 0 && UI_SERVO_CONTROL > 0
 #if   UI_SERVO_CONTROL == 1 && defined(SERVO0_NEUTRAL_POS)
@@ -137,7 +149,6 @@ bool UIMenuEntry::showEntry() const
 
 #if UI_DISPLAY_TYPE != NO_DISPLAY
 UIDisplay uid;
-char displayCache[UI_ROWS][MAX_COLS+1];
 
 // Menu up sign - code 1
 // ..*.. 4
@@ -568,7 +579,164 @@ void initializeLCD()
 }
 // ----------- end direct LCD driver
 #endif
-#if UI_DISPLAY_TYPE < DISPLAY_ARDUINO_LIB
+
+#if UI_DISPLAY_TYPE == DISPLAY_SR
+// Native LCD driver for displays connected using shift register (2-wire or 3-wire)
+//
+// Options:
+//   #define UI_DISPLAY_TYPE        DISPLAY_SR
+//   #define UI_DISPLAY_DATA_PIN    29
+//   #define UI_DISPLAY_CLOCK_PIN   28
+//   #define UI_DISPLAY_ENABLE_PIN  -1 // or undefined for 2-wire, pin number for 3-wire
+//
+// Non-latching shift register (e.g. 74LS164) outputs:
+//   - Q0 - unused
+//   - Q1 - unused
+//   - Q2 - LCD RS
+//   - Q3 - LCD D4
+//   - Q4 - LCD D5
+//   - Q5 - LCD D6
+//   - Q6 - LCD D7
+//   - Q7 - LCD ENABLE (via AND gate for 2-wire version, unused for 3-wire)
+//
+// More info about this:
+//    https://bitbucket.org/fmalpartida/new-liquidcrystal/wiki/Home
+// More schematics including latching (74HC595) and non-latching (74LS164) shift registers:
+//    https://bitbucket.org/fmalpartida/new-liquidcrystal/wiki/schematics
+
+// Shift a bit into shift register
+static void lcdShiftBit(uint8_t bit)
+{
+    WRITE(UI_DISPLAY_DATA_PIN, bit);
+    WRITE(UI_DISPLAY_CLOCK_PIN, 1);
+    HAL::delayMicroseconds(2);
+    WRITE(UI_DISPLAY_CLOCK_PIN, 0);
+    HAL::delayMicroseconds(2);
+}
+
+// Write a nibble into LCD via SR
+void lcdWriteNibble(uint8_t value, uint8_t rs = 0)
+{
+#if !(defined(UI_DISPLAY_ENABLE_PIN) && (UI_DISPLAY_ENABLE_PIN > -1))
+    // Clear shift register by shifting zero bits (for 2-wire only)
+    for (uint8_t i = 0; i < 8; ++i)
+        lcdShiftBit(0);
+#endif
+
+    // Shift ENABLE bit to AND gate (for 2-wire version). It will be
+    // set to high for LCD when both Q7 and DATA/EN output are high.
+    lcdShiftBit(1);          // Q7: AND gate
+
+    // Shift 4 data bits from value
+    lcdShiftBit(value & 8);  // Q6: LCD D7
+    lcdShiftBit(value & 4);  // Q5: LCD D6
+    lcdShiftBit(value & 2);  // Q4: LCD D5
+    lcdShiftBit(value & 1);  // Q3: LCD D4
+
+    // Shift RS bit
+    lcdShiftBit(rs);         // Q2: LCD RS
+
+    // Shift 2 unused bits (last must be 0 for 2-wire version)
+    lcdShiftBit(0);          // Q1
+    lcdShiftBit(0);          // Q0, shifts 1 to Q7 that allows EN output
+
+    // Strobe ENABLE bit to write data into the LCD using AND gate
+    // for 2-wire version or dedicated pin for 3-wire
+#if defined(UI_DISPLAY_ENABLE_PIN) && (UI_DISPLAY_ENABLE_PIN > -1)
+    WRITE(UI_DISPLAY_ENABLE_PIN, 1);
+#else
+    WRITE(UI_DISPLAY_DATA_PIN, 1);
+#endif
+    HAL::delayMicroseconds(2);
+#if defined(UI_DISPLAY_ENABLE_PIN) && (UI_DISPLAY_ENABLE_PIN > -1)
+    WRITE(UI_DISPLAY_ENABLE_PIN, 0);
+#else
+    WRITE(UI_DISPLAY_DATA_PIN, 0);
+#endif
+    HAL::delayMicroseconds(UI_DELAYPERCHAR);
+}
+
+// Write a byte into LCD via SR
+void lcdWriteByte(uint8_t c, uint8_t rs)
+{
+    lcdWriteNibble(c >> 4, rs);
+    lcdWriteNibble(c, rs);
+}
+
+// Initialize LCD via SR
+void initializeLCD(bool refresh = false)
+{
+    if (!refresh) {
+        // Init LCD pins
+        SET_OUTPUT(UI_DISPLAY_DATA_PIN);
+        SET_OUTPUT(UI_DISPLAY_CLOCK_PIN);
+        WRITE(UI_DISPLAY_DATA_PIN, 0);
+        WRITE(UI_DISPLAY_CLOCK_PIN, 0);
+#if defined(UI_DISPLAY_ENABLE_PIN) && (UI_DISPLAY_ENABLE_PIN > -1)
+        SET_OUTPUT(UI_DISPLAY_ENABLE_PIN);
+        WRITE(UI_DISPLAY_ENABLE_PIN, 0);
+#endif
+
+        // SEE PAGE 45/46 FOR INITIALIZATION SPECIFICATION!
+        // according to datasheet, we need at least 40ms after power rises above 2.7V
+        // before sending commands. Arduino can turn on way before 4.5V.
+        // is this delay long enough for all cases??
+        HAL::delayMilliseconds(235);
+    }
+
+    // Put the LCD into 4 bit mode
+    // this is according to the hitachi HD44780 datasheet
+    // figure 24, pg 46
+
+    // We start in 8 bit mode, try to set 4 bit mode
+    // at this point we are in 8 bit mode but of course in this
+    // interface 4 pins are dangling unconnected and the values
+    // on them don't matter for these instructions.
+    lcdWriteNibble(0x03);
+    HAL::delayMicroseconds(5000); // I have one LCD for which 4500 here was not long enough.
+    // Second try
+    lcdWriteNibble(0x03);
+    HAL::delayMicroseconds(5000);
+    // Third go!
+    lcdWriteNibble(0x03);
+    HAL::delayMicroseconds(160);
+    // Finally, set to 4-bit interface
+    lcdWriteNibble(0x02);
+    HAL::delayMicroseconds(160);
+
+    // finally, set # lines, font size, etc.
+    lcdCommand(LCD_4BIT | LCD_2LINE | LCD_5X7);
+    if (!refresh) {
+        lcdCommand(LCD_CLEAR);
+        HAL::delayMilliseconds(3); // clear is slow operation
+    }
+    lcdCommand(LCD_INCREASE | LCD_DISPLAYSHIFTOFF);
+    lcdCommand(LCD_DISPLAYON | LCD_CURSOROFF | LCD_BLINKINGOFF);
+    uid.createChar(1, character_back);
+    uid.createChar(2, character_degree);
+    uid.createChar(3, character_selected);
+    uid.createChar(4, character_unselected);
+    uid.createChar(5, character_temperature);
+    uid.createChar(6, character_folder);
+    uid.createChar(7, character_ready);
+
+    uid.lastSwitch = uid.lastRefresh = HAL::timeInMilliseconds();
+}
+
+#ifdef TRY_AUTOREPAIR_LCD_ERRORS
+#define HAS_AUTOREPAIR
+// Fast repair function for displays loosing their settings.
+// Do not call this if your display has no problems.
+void repairLCD()
+{
+    // Almost the same as for init except GPIO init and LCD clear
+    initializeLCD(true);
+}
+#endif
+
+#endif // UI_DISPLAY_TYPE == DISPLAY_SR
+
+#if UI_DISPLAY_TYPE < DISPLAY_ARDUINO_LIB || UI_DISPLAY_TYPE == DISPLAY_SR
 void UIDisplay::printRow(uint8_t r,char *txt,char *txt2,uint8_t changeAtCol)
 {
     changeAtCol = RMath::min(UI_COLS, changeAtCol);
@@ -721,6 +889,7 @@ void u8PrintChar(char c)
 }
 void printU8GRow(uint8_t x,uint8_t y,char *text)
 {
+    //if(!u8g_IsBBXIntersection(&u8g,0,y-UI_LCD_WIDTH,UI_FONT_HEIGHT,UI_LCD_WIDTH,UI_FONT_HEIGHT+2)) return; // row not visible
     char c;
     u8_tx = x;
     u8_ty = y;
@@ -734,6 +903,9 @@ void UIDisplay::printRow(uint8_t r,char *txt,char *txt2,uint8_t changeAtCol)
 // Set row
     if(r >= UI_ROWS) return;
     int y = r * UI_FONT_HEIGHT;
+#ifdef UI_HEAD
+	y += UI_FONT_HEIGHT;
+#endif	
     if(!u8g_IsBBXIntersection(&u8g,0,y,UI_LCD_WIDTH,UI_FONT_HEIGHT+2)) return; // row not visible
     u8_tx = 0;
     u8_ty = y+UI_FONT_HEIGHT; //set position
@@ -823,22 +995,7 @@ u8g_InitSPI(&u8g,&u8g_dev_st7565_nhd_c12864_sw_spi,UI_DISPLAY_D4_PIN,UI_DISPLAY_
 UIDisplay::UIDisplay()
 {
 }
-#if UI_ANIMATION
-void slideIn(uint8_t row,FSTRINGPARAM(text))
-{
-    char *empty="";
-    int8_t i = 0;
-    uid.col=0;
-    uid.addStringP(text);
-    uid.printCols[uid.col]=0;
-    for(i=UI_COLS-1; i>=0; i--)
-    {
-        uid.printRow(row,empty,uid.printCols,i);
-        HAL::pingWatchdog();
-        HAL::delayMilliseconds(10);
-    }
-}
-#endif // UI_ANIMATION
+
 void UIDisplay::initialize()
 {
     oldMenuLevel = -2;
@@ -857,7 +1014,7 @@ void UIDisplay::initialize()
     HAL::i2cWrite(~(UI_DISPLAY_I2C_OUTPUT_PINS & 255));
     HAL::i2cWrite(~(UI_DISPLAY_I2C_OUTPUT_PINS >> 8));
     HAL::i2cStop();
-    // Set pullups according to  UI_DISPLAY_I2C_PULLUP
+    // Set pull ups according to  UI_DISPLAY_I2C_PULLUP
     HAL::i2cStart(UI_DISPLAY_I2C_ADDRESS+I2C_WRITE);
     HAL::i2cWrite(0x0C); // GPPUA
     HAL::i2cWrite(UI_DISPLAY_I2C_PULLUP & 255);
@@ -894,7 +1051,7 @@ void UIDisplay::initialize()
 #if defined(USER_KEY4_PIN) && USER_KEY4_PIN > -1
     UI_KEYS_INIT_BUTTON_LOW(USER_KEY4_PIN);
 #endif
-#if UI_DISPLAY_TYPE == DISPLAY_I2C
+#if UI_DISPLAY_TYPE == DISPLAY_I2C && defined(UI_DISPLAY_I2C_CHIPTYPE) && UI_DISPLAY_I2C_CHIPTYPE==1
     // I don't know why but after power up the lcd does not come up
     // but if I reinitialize i2c and the lcd again here it works.
     HAL::delayMilliseconds(10);
@@ -916,14 +1073,12 @@ void UIDisplay::initialize()
 #if UI_DISPLAY_TYPE == DISPLAY_GAMEDUINO2
     GD2::startScreen();
 #else
-#if UI_ANIMATION==false || UI_DISPLAY_TYPE == DISPLAY_U8G
 #if UI_DISPLAY_TYPE == DISPLAY_U8G
     //u8g picture loop
     u8g_FirstPage(&u8g);
     do
     {
         u8g_DrawBitmapP(&u8g, 128 - LOGO_WIDTH, 0, ((LOGO_WIDTH + 7) / 8), LOGO_HEIGHT, logo);
-        for(uint8_t y = 0; y < UI_ROWS; y++) displayCache[y][0] = 0;
 #ifdef CUSTOM_LOGO
         printRowP(4, PSTR("Repetier"));
         printRowP(5, PSTR("Ver " REPETIER_VERSION));
@@ -933,27 +1088,17 @@ void UIDisplay::initialize()
         printRowP(3, PSTR("Machine:"));
         printRowP(4, PSTR(UI_PRINTER_NAME));
         printRowP(5, PSTR(UI_PRINTER_COMPANY));
-#endif
+#endif // CUSTOM_LOGO
     }
     while( u8g_NextPage(&u8g) );  //end picture loop
 #else // not DISPLAY_U8G
-    for(uint8_t y=0; y<UI_ROWS; y++) displayCache[y][0] = 0;
     printRowP(0, versionString);
     printRowP(1, PSTR(UI_PRINTER_NAME));
-#if UI_ROWS>2
+#if UI_ROWS > 2
     printRowP(UI_ROWS-1, PSTR(UI_PRINTER_COMPANY));
-#endif
-#endif
-#else
-    slideIn(0, versionString);
-    strcpy(displayCache[0], uid.printCols);
-    slideIn(1, PSTR(UI_PRINTER_NAME));
-    strcpy(displayCache[1], uid.printCols);
-#if UI_ROWS>2
-    slideIn(UI_ROWS-1, PSTR(UI_PRINTER_COMPANY));
-    strcpy(displayCache[UI_ROWS-1], uid.printCols);
-#endif
-#endif
+#endif // UI_ROWS > 2
+
+#endif // not DISPLAY_U8G
 #endif // gameduino2
     HAL::delayMilliseconds(UI_START_SCREEN_DELAY);
 #endif
@@ -964,7 +1109,7 @@ void UIDisplay::initialize()
     HAL::i2cStop();
 #endif
 }
-#if UI_DISPLAY_TYPE == DISPLAY_4BIT || UI_DISPLAY_TYPE == DISPLAY_8BIT || UI_DISPLAY_TYPE == DISPLAY_I2C
+#if UI_DISPLAY_TYPE == DISPLAY_4BIT || UI_DISPLAY_TYPE == DISPLAY_8BIT || UI_DISPLAY_TYPE == DISPLAY_I2C || UI_DISPLAY_TYPE == DISPLAY_SR
 void UIDisplay::createChar(uint8_t location,const uint8_t charmap[])
 {
     location &= 0x7; // we only have 8 locations 0-7
@@ -1013,8 +1158,7 @@ void UIDisplay::addInt(int value,uint8_t digits,char fillChar)
         char c = m - 10 * value;
         *--str = c + '0';
         dig++;
-    }
-    while(value);
+    } while(value);
     if(neg)
         uid.printCols[col++] = '-';
     if(digits < 6)
@@ -1116,6 +1260,17 @@ void UIDisplay::addStringP(FSTRINGPARAM(text))
     }
 }
 
+void UIDisplay::addString(char *text)
+{
+    while(col < MAX_COLS)
+    {
+        uint8_t c = *text;
+        if(c == 0) return;
+        uid.printCols[col++] = c;
+        text++;
+    }
+}
+
 void UIDisplay::addStringOnOff(uint8_t on)
 {
     addStringP(on ? Com::translatedF(UI_TEXT_ON_ID) : Com::translatedF(UI_TEXT_OFF_ID));
@@ -1202,7 +1357,7 @@ void UIDisplay::addGCode(GCode *code)
         addFloat(code->R);
     }
 #endif
-    // cannot print string, it isnt part of the gcode structure.
+    // cannot print string, it isn't part of the gcode structure.
     //it points to temp memory in a buffer.
     //if(code->hasSTRING())
 }
@@ -1341,6 +1496,12 @@ void UIDisplay::parse(const char *txt,bool ram)
                 ivalue = 0;
                 fvalue = Extruder::getHeatedBedTemperature();
             }
+#if FAN_THERMO_PIN > -1
+			else if(c2 == 't') {
+				fvalue = thermoController.currentTemperatureC;
+				ivalue = 0;
+			}
+#endif
             addFloat(fvalue, 3, ivalue);
             break;
         }
@@ -1368,6 +1529,17 @@ void UIDisplay::parse(const char *txt,bool ram)
             break;
         case 'O': // ops related stuff
             break;
+        case 'P': // Print state related
+            if(c2 == 'n') { // print name
+                addString(Printer::printName);
+            } else if(c2 == 'l') {
+                addInt(Printer::currentLayer,0);
+            } else if(c2 == 'L') {
+                addInt(Printer::maxLayer,0);
+            } else if(c2 == 'p') {
+                addFloat(Printer::progress,3,1);
+            }
+            break;
         case 'l':
             if(c2 == 'a') addInt(lastAction,4);
 #if defined(CASE_LIGHTS_PIN) && CASE_LIGHTS_PIN >= 0
@@ -1381,7 +1553,7 @@ void UIDisplay::parse(const char *txt,bool ram)
             if(c2 == 's')
             {
 #if SDSUPPORT
-                if(sd.sdactive && sd.sdmode)
+                if(sd.sdactive && sd.sdmode && !statusMsg[0])
                 {
                     addStringP(Com::translatedF(UI_TEXT_PRINT_POS_ID));
                     float percent;
@@ -1550,6 +1722,17 @@ void UIDisplay::parse(const char *txt,bool ram)
                     addFloat(Printer::filamentPrinted * 0.001,3,2);
                     break;
                 }
+				if(c2>='0' && c2<='2') {
+					if(Printer::isHoming()) {
+						addStringP(PSTR(" Homing"));
+						break;
+					} else {
+						if(Printer::isAnimation() && ((c2=='0' && !Printer::isXHomed()) || (c2=='1' && !Printer::isYHomed()) || (c2=='2' && !Printer::isZHomed()))) {
+							addStringP(PSTR("   ?.??"));
+							break;
+						}	
+					}					
+				}
                 if(c2=='0')
                     fvalue = Printer::realXPosition();
                 else if(c2=='1')
@@ -1831,6 +2014,10 @@ void sdrefresh(uint16_t &r,char cache[UI_ROWS][MAX_COLS+1])
 #endif
 }
 
+#if defined(UI_HEAD) && UI_DISPLAY_TYPE == DISPLAY_U8G
+FSTRINGVALUE(uiHead,UI_HEAD) 
+#endif
+
 // Refresh current menu page
 void UIDisplay::refreshPage()
 {
@@ -1840,7 +2027,7 @@ void UIDisplay::refreshPage()
 #else
     uint16_t r;
     uint8_t mtype = UI_MENU_TYPE_INFO;
-    char cache[UI_ROWS][MAX_COLS + 1];
+    char cache[UI_ROWS+UI_ROWS_EXTRA][MAX_COLS + 1];
     adjustMenuPos();
 #if UI_AUTORETURN_TO_MENU_AFTER != 0
     // Reset timeout on menu back when user active on menu
@@ -1850,20 +2037,70 @@ void UIDisplay::refreshPage()
     encoderStartScreen = uid.encoderLast;
     // Copy result into cache
     Endstops::update();
+
+    // precompute parsed string later used
+
+#if defined(UI_HEAD) && UI_DISPLAY_TYPE == DISPLAY_U8G
+    char head[MAX_COLS + 1];
+    col = 0;
+    parse(uiHead,false);
+    strcpy(head,uid.printCols);
+#endif
+    char *text;
+
     if(menuLevel == 0) // Top level menu
     {
-        UIMenu *men = (UIMenu*)pgm_read_word(&(ui_pages[menuPos[0]]));
-        uint16_t nr = pgm_read_word_near(&(men->numEntries));
-        UIMenuEntry **entries = (UIMenuEntry**)pgm_read_word(&(men->entries));
-        for(r = 0; r < nr && r < UI_ROWS; r++)
-        {
-            UIMenuEntry *ent = (UIMenuEntry *)pgm_read_word(&(entries[r]));
+        if(menuPos[0] == 0 && Printer::isPrinting()) {
+#if SDSUPPORT
+            if(sd.sdactive && sd.sdmode) {
+                Printer::progress = (static_cast<float>(sd.sdpos)*100.0)/static_cast<float>(sd.filesize);
+            }
+#endif
             col = 0;
-            char *text = (char*)pgm_read_word(&(ent->text));
-            if(text == NULL)
-                text = (char*)Com::translatedF(pgm_read_word(&(ent->translation)));
+            r = 0;
+            if(UI_ROWS > 2) {
+                text = (char*)Com::translatedF(UI_TEXT_PRINTNAME_ID);
+                parse(text,false);
+                strcpy(cache[r++],uid.printCols);
+            }
+            col = 0;
+            text = (char*)Com::translatedF(UI_TEXT_PROGRESS_ID);
             parse(text,false);
-            strcpy(cache[r],uid.printCols);
+            strcpy(cache[r++],uid.printCols);
+            if(UI_ROWS >= 4) {
+                col = 0;
+                if(Printer::maxLayer > 0) {
+                text = (char*)Com::translatedF(UI_TEXT_LAYER_ID);
+                parse(text,false);
+                strcpy(cache[r++],uid.printCols);
+                } else cache[r++][0] = 0; // unknown layer
+                if(UI_ROWS > 4) {
+                    col = 0;
+                    text = (char*)Com::translatedF(UI_TEXT_EMPTY_ID);
+                    parse(text,false);
+                    strcpy(cache[r++],uid.printCols);
+                    if(UI_ROWS > 5)
+                        strcpy(cache[r++],uid.printCols);
+                }
+                col = 0;
+                text = (char*)Com::translatedF(UI_TEXT_STATUS_ID);
+                parse(text,false);
+                strcpy(cache[r++],uid.printCols);
+            }
+        } else {
+            UIMenu *men = (UIMenu*)pgm_read_word(&(ui_pages[menuPos[0]]));
+            uint16_t nr = pgm_read_word_near(&(men->numEntries));
+            UIMenuEntry **entries = (UIMenuEntry**)pgm_read_word(&(men->entries));
+            for(r = 0; r < nr && r < UI_ROWS + UI_ROWS_EXTRA; r++)
+            {
+                UIMenuEntry *ent = (UIMenuEntry *)pgm_read_word(&(entries[r]));
+                col = 0;
+                text = (char*)pgm_read_word(&(ent->text));
+                if(text == NULL)
+                    text = (char*)Com::translatedF(pgm_read_word(&(ent->translation)));
+                parse(text,false);
+                strcpy(cache[r],uid.printCols);
+            }
         }
     }
     else
@@ -1896,19 +2133,19 @@ void UIDisplay::refreshPage()
             char *text = (char*)pgm_read_word(&(ent->text));
             if(text == NULL)
                 text = (char*)Com::translatedF(pgm_read_word(&(ent->translation)));
-            parse(text,false);
-            if(entType == 2)   // Draw submenu marker at the right side
+            parse(text, false);
+            if(entType == 2)   // Draw sub menu marker at the right side
             {
-                while(col<UI_COLS-1) uid.printCols[col++]=' ';
-                if(col>UI_COLS)
+                while(col < UI_COLS-1) uid.printCols[col++]=' ';
+                if(col > UI_COLS)
                 {
-                    uid.printCols[RMath::min(UI_COLS - 1,col)] = CHAR_RIGHT;
+                    uid.printCols[RMath::min(UI_COLS - 1, col)] = CHAR_RIGHT;
                 }
                 else
                     uid.printCols[col] = CHAR_RIGHT; // Arrow right
                 uid.printCols[++col] = 0;
             }
-            strcpy(cache[r],uid.printCols);
+            strcpy(cache[r], uid.printCols);
             r++;
         }
     }
@@ -1922,78 +2159,23 @@ void UIDisplay::refreshPage()
     uid.printCols[0] = 0;
     while(r < UI_ROWS) // delete trailing empty rows
         strcpy(cache[r++],uid.printCols);
-    // cache now contains the data to show
-    // Compute transition
-    uint8_t transition = 0; // 0 = display, 1 = up, 2 = down, 3 = left, 4 = right
-#if UI_ANIMATION
-    if(menuLevel != oldMenuLevel && !PrintLine::hasLines())
+    // compute line scrolling values    
+    uint8_t off0 = (shift <= 0 ? 0 : shift),y;
+    uint8_t off[UI_ROWS+UI_ROWS_EXTRA];
+    for(y = 0; y < UI_ROWS+UI_ROWS_EXTRA; y++)
     {
-        if(oldMenuLevel == 0 || oldMenuLevel == -2)
-            transition = 1;
-        else if(menuLevel == 0)
-            transition = 2;
-        else if(menuLevel>oldMenuLevel)
-            transition = 3;
-        else
-            transition = 4;
-    }
-#endif
-    uint8_t loops = 1;
-    uint8_t dt = 1,y;
-    if(transition == 1 || transition == 2) loops = UI_ROWS;
-    else if(transition > 2)
-    {
-        dt = (UI_COLS + UI_COLS - 1) / 16;
-        loops = UI_COLS + 1 / dt;
-    }
-    uint8_t off0 = (shift <= 0 ? 0 : shift);
-    uint8_t scroll = dt;
-    uint8_t off[UI_ROWS];
-    if(transition == 0) // Copy cache to displayCache
-    {
-        for(y = 0; y < UI_ROWS; y++)
-            strcpy(displayCache[y],cache[y]);
-    }
-    for(y = 0; y < UI_ROWS; y++)
-    {
-        uint8_t len = strlen(displayCache[y]); // length of line content
+        uint8_t len = strlen(cache[y]); // length of line content
         off[y] = len > UI_COLS ? RMath::min(len - UI_COLS,off0) : 0;
         if(len > UI_COLS)
         {
             off[y] = RMath::min(len - UI_COLS,off0);
-            if(transition == 0 && (mtype == UI_MENU_TYPE_FILE_SELECTOR || mtype == UI_MENU_TYPE_SUBMENU))  // Copy first char to front
+            if(mtype == UI_MENU_TYPE_FILE_SELECTOR || mtype == UI_MENU_TYPE_SUBMENU)  // Copy first char to front
             {
-                //displayCache[y][off[y]] = displayCache[y][0];
                 cache[y][off[y]] = cache[y][0];
             }
         }
         else off[y] = 0;
-#if UI_ANIMATION
-        if(transition == 3)
-        {
-            for(r = len; r < MAX_COLS; r++)
-            {
-                displayCache[y][r] = 32;
-            }
-            displayCache[y][MAX_COLS] = 0;
-        }
-        else if(transition == 4)
-        {
-            for(r = strlen(cache[y]); r < MAX_COLS; r++)
-            {
-                cache[y][r] = 32;
-            }
-            cache[y][MAX_COLS] = 0;
-        }
-#endif
-    }
-    for(uint8_t l = 0; l<loops; l++)
-    {
-        if(uid.encoderLast != encoderStartScreen)
-        {
-            scroll = 200;
-        }
-        scroll += dt;
+     }
 #if UI_DISPLAY_TYPE == DISPLAY_U8G
 #define drawHProgressBar(x,y,width,height,progress) \
      {u8g_DrawFrame(&u8g,x,y, width, height);  \
@@ -2010,18 +2192,19 @@ void UIDisplay::refreshPage()
         unsigned long sdPercent = 0;
 #endif
         //fan
-#if FAN_PIN>-1 && FEATURE_FAN_CONTROL
+#if FAN_PIN > -1 && FEATURE_FAN_CONTROL
         int fanPercent = 0;
         char fanString[2];
-#endif
+#endif // FAN_PIN > -1 && FEATURE_FAN_CONTROL
         if(menuLevel == 0 && menuPos[0] == 0 ) // Main menu with special graphics
         {
+          if(!Printer::isPrinting()) {
 //ext1 and ext2 animation symbols
 #if NUM_EXTRUDER < 3
             if(extruder[0].tempControl.targetTemperatureC > 30)
 #else
             if(Extruder::current->tempControl.targetTemperatureC > 30)
-#endif
+#endif // NUM_EXTRUDER < 3
                 cache[0][0] = Printer::isAnimation()?'\x08':'\x09';
             else
                 cache[0][0] = '\x0a'; //off
@@ -2030,7 +2213,7 @@ void UIDisplay::refreshPage()
                 cache[1][0] = Printer::isAnimation()?'\x08':'\x09';
             else
                 cache[1][0] = '\x0a'; //off
-#endif
+#endif // NUM_EXTRUDER == 2 && MIXING_EXTRUDER == 0
 #if HAVE_HEATED_BED
             //heated bed animated icons
             uint8_t lin = 2 - ((NUM_EXTRUDER != 2) ? 1 : 0);
@@ -2038,7 +2221,7 @@ void UIDisplay::refreshPage()
                 cache[lin][0] = Printer::isAnimation() ? '\x0c' : '\x0d';
             else
                 cache[lin][0] = '\x0b';
-#endif
+#endif // HAVE_HEATED_BED
 #if FAN_PIN > -1 && FEATURE_FAN_CONTROL
             //fan
             fanPercent = Printer::getFanSpeed() * 100 / 255;
@@ -2051,7 +2234,7 @@ void UIDisplay::refreshPage()
             {
                 fanString[0] = '\x0e';
             }
-#endif
+#endif // FAN_PIN > -1 && FEATURE_FAN_CONTROL
 #if SDSUPPORT
             //SD Card
             if(sd.sdactive)
@@ -2066,19 +2249,46 @@ void UIDisplay::refreshPage()
                     sdPercent = 0;
                 }
             }
-#endif
+#endif // SDSUPPORT
+        }
         }
 #endif
         //u8g picture loop
         u8g_FirstPage(&u8g);
         do
         {
+          if(menuLevel == 0 && menuPos[0] == 0 )
+          {
+            if(Printer::isPrinting()) {
+#if defined(UI_HEAD)
+              // Show status line
+              u8g_SetColorIndex(&u8g,1);
+              u8g_draw_box(&u8g, 0, 0, u8g_GetWidth(&u8g), UI_FONT_SMALL_HEIGHT + 1);
+              u8g_SetColorIndex(&u8g, 0);
+              u8g_SetFont(&u8g,UI_FONT_SMALL);
+              if(u8g_IsBBXIntersection(&u8g, 0, 1, 1, UI_FONT_SMALL_HEIGHT+1))
+              printU8GRow(1,UI_FONT_SMALL_HEIGHT,head);
+              u8g_SetFont(&u8g, UI_FONT_DEFAULT);
+              u8g_SetColorIndex(&u8g,1);
+
+              drawHProgressBar(0,UI_FONT_HEIGHT*2+2, 128, UI_FONT_HEIGHT-1, Printer::progress);
+              if(u8g_IsBBXIntersection(&u8g, 0, UI_FONT_HEIGHT*4 - UI_FONT_HEIGHT, 1, UI_FONT_HEIGHT))
+                    printU8GRow(85,UI_FONT_HEIGHT*4,cache[1]); // progress value
+              if(Printer::maxLayer > 0 && u8g_IsBBXIntersection(&u8g, 0, UI_FONT_HEIGHT*5 - UI_FONT_HEIGHT, 1, UI_FONT_HEIGHT))
+                  printU8GRow(0,UI_FONT_HEIGHT*5,cache[2]); // Layer
+              if(u8g_IsBBXIntersection(&u8g, 0, UI_FONT_HEIGHT*6+4 - UI_FONT_HEIGHT, 1, UI_FONT_HEIGHT))
+                  printU8GRow(0,UI_FONT_HEIGHT*6+2,cache[UI_ROWS-1]);
+#else
+              drawHProgressBar(0,UI_FONT_HEIGHT*1+2, 128, UI_FONT_HEIGHT-1, Printer::progress);
+              if(u8g_IsBBXIntersection(&u8g, 0, UI_FONT_HEIGHT*3+2 - UI_FONT_HEIGHT, 1, UI_FONT_HEIGHT))
+                    printU8GRow(85,UI_FONT_HEIGHT*3+2,cache[1]); // progress value
+              if(Printer::maxLayer > 0 && u8g_IsBBXIntersection(&u8g, 0, UI_FONT_HEIGHT*4+8 - UI_FONT_HEIGHT, 1, UI_FONT_HEIGHT))
+              printU8GRow(0,UI_FONT_HEIGHT*4+8,cache[2]); // Layer
+              if(u8g_IsBBXIntersection(&u8g, 0, UI_FONT_HEIGHT*6+4 - UI_FONT_HEIGHT, 1, UI_FONT_HEIGHT))
+                  printU8GRow(0,UI_FONT_HEIGHT*6+2,cache[UI_ROWS-1]);
 #endif
-            if(transition == 0)
-            {
-#if UI_DISPLAY_TYPE == DISPLAY_U8G
-                if(menuLevel == 0 && menuPos[0] == 0 )
-                {
+              printRow(0, cache[0], NULL, UI_COLS); // Object name
+          } else { // not printing
                     u8g_SetFont(&u8g,UI_FONT_SMALL);
                     uint8_t py = 8;
                     for(uint8_t r = 0; r < 3; r++)
@@ -2087,7 +2297,7 @@ void UIDisplay::refreshPage()
                             printU8GRow(0, py, cache[r]);
                         py += 10;
                     }
-#if FAN_PIN>-1 && FEATURE_FAN_CONTROL
+#if FAN_PIN > -1 && FEATURE_FAN_CONTROL
                     //fan
                     if(u8g_IsBBXIntersection(&u8g, 0, 30 - UI_FONT_SMALL_HEIGHT, 1, UI_FONT_SMALL_HEIGHT))
                         printU8GRow(117,30,fanString);
@@ -2104,7 +2314,7 @@ void UIDisplay::refreshPage()
                         printU8GRow(66,52,const_cast<char *>("SD"));
                         drawHProgressBar(79,46, 46, 6, sdPercent);
                     }
-#endif
+#endif // SDSUPPORT
                     //Status
                     py = u8g_GetHeight(&u8g) - 2;
                     if(u8g_IsBBXIntersection(&u8g, 70, py - UI_FONT_SMALL_HEIGHT, 1, UI_FONT_SMALL_HEIGHT))
@@ -2118,97 +2328,44 @@ void UIDisplay::refreshPage()
                         u8g_draw_vline(&u8g,62, 0, 54);
                     }
                     u8g_SetFont(&u8g, UI_FONT_DEFAULT);
-                }
+                    } // not printing
+                } // menu level 0 page 0
                 else
                 {
+#endif //  UI_DISPLAY_TYPE == DISPLAY_U8G
+#if defined(UI_HEAD) && UI_DISPLAY_TYPE == DISPLAY_U8G
+					// Show status line
+					u8g_SetColorIndex(&u8g,1);
+					u8g_draw_box(&u8g, 0, 0, u8g_GetWidth(&u8g), UI_FONT_SMALL_HEIGHT + 1);
+					u8g_SetColorIndex(&u8g, 0);
+					u8g_SetFont(&u8g,UI_FONT_SMALL);
+                    if(u8g_IsBBXIntersection(&u8g, 0, 1, 1, UI_FONT_SMALL_HEIGHT+1))
+						printU8GRow(1,UI_FONT_SMALL_HEIGHT,head);
+					u8g_SetFont(&u8g, UI_FONT_DEFAULT);		
+					u8g_SetColorIndex(&u8g,1);
+					if(menuLevel == 0) {
+    					u8g_SetFont(&u8g,UI_FONT_SMALL);
+                        for(y = 0; y < UI_ROWS; y++) {
+                            int h0 = UI_FONT_HEIGHT + y*(UI_FONT_SMALL_HEIGHT+1);
+                            if(u8g_IsBBXIntersection(&u8g, 0, h0, 1, UI_FONT_SMALL_HEIGHT+1))
+                                printU8GRow(14,h0 + UI_FONT_SMALL_HEIGHT + 1, &cache[y][off[y]]);
+                        }
+    					u8g_SetFont(&u8g, UI_FONT_DEFAULT);
+                        printRow(4, &cache[5][off[5]], NULL, UI_COLS);
+                    } else {
 #endif
                     for(y = 0; y < UI_ROWS; y++)
                         printRow(y, &cache[y][off[y]], NULL, UI_COLS);
-#if UI_DISPLAY_TYPE == DISPLAY_U8G
-                }
-#endif
-            }
-#if UI_ANIMATION
-            else
-            {
-                if(transition == 1)   // up
-                {
-                    if(scroll > UI_ROWS)
-                    {
-                        scroll = UI_ROWS;
-                        l = loops;
+#if  defined(UI_HEAD) && UI_DISPLAY_TYPE == DISPLAY_U8G
                     }
-                    for(y = 0; y < UI_ROWS - scroll; y++)
-                    {
-                        r = y + scroll;
-                        printRow(y, &displayCache[r][off[r]], NULL, UI_COLS);
-                    }
-                    for(y = 0; y < scroll; y++)
-                    {
-                        printRow(UI_ROWS - scroll + y,cache[y], NULL, UI_COLS);
-                    }
-                }
-                else if(transition == 2)     // down
-                {
-                    if(scroll > UI_ROWS)
-                    {
-                        scroll = UI_ROWS;
-                        l = loops;
-                    }
-                    for(y = 0; y < scroll; y++)
-                    {
-                        printRow(y, cache[UI_ROWS - scroll + y], NULL, UI_COLS);
-                    }
-                    for(y = 0; y < UI_ROWS - scroll; y++)
-                    {
-                        r = y + scroll;
-                        printRow(y + scroll, &displayCache[y][off[y]], NULL, UI_COLS);
-                    }
-                }
-                else if(transition == 3)     // left
-                {
-                    if(scroll > UI_COLS)
-                    {
-                        scroll = UI_COLS;
-                        l = loops;
-                    }
-                    for(y = 0; y < UI_ROWS; y++)
-                    {
-                        printRow(y,&displayCache[y][off[y] + scroll], cache[y], UI_COLS - scroll);
-                    }
-                }
-                else     // right
-                {
-                    if(scroll > UI_COLS)
-                    {
-                        scroll = UI_COLS;
-                        l = loops;
-                    }
-                    for(y = 0; y < UI_ROWS; y++)
-                    {
-                        printRow(y, cache[y] + UI_COLS - scroll, &displayCache[y][off[y]], scroll);
-                    }
-                }
-#if UI_DISPLAY_TYPE != DISPLAY_U8G
-                HAL::delayMilliseconds(transition < 3 ? 200 : 70);
-#endif
-                HAL::pingWatchdog();
-            }
 #endif
 #if UI_DISPLAY_TYPE == DISPLAY_U8G
+                }
         }
         while( u8g_NextPage(&u8g) );  //end picture loop
-        Printer::toggleAnimation();
-#endif
-    } // for l
-#if UI_ANIMATION
-    // copy to last cache
-    if(transition != 0)
-        for(y = 0; y < UI_ROWS; y++)
-            strcpy(displayCache[y], cache[y]);
-    oldMenuLevel = menuLevel;
 #endif
 #endif
+    Printer::toggleAnimation();
 }
 
 void UIDisplay::pushMenu(const UIMenu *men, bool refresh)
@@ -2392,6 +2549,9 @@ int UIDisplay::okAction(bool allowMoves)
             Printer::homeAxis(true, true, false);
 #endif
 #endif
+			Printer::coordinateOffset[Z_AXIS] = Printer::popWizardVar().f;
+			Printer::coordinateOffset[Y_AXIS] = Printer::popWizardVar().f;
+			Printer::coordinateOffset[X_AXIS] = Printer::popWizardVar().f;
             Printer::GoToMemoryPosition(true, true, false, false, Printer::homingFeedrate[X_AXIS]);
             Printer::GoToMemoryPosition(false, false, true, false, Printer::homingFeedrate[Z_AXIS]);
             Extruder::current->retractDistance(-EEPROM_FLOAT(RETRACTION_LENGTH));
@@ -2480,7 +2640,7 @@ void UIDisplay::adjustMenuPos()
             menuPos[menuLevel]++;
     }
 
-    uint8_t skipped = 0;
+    uint16_t skipped = 0;
     bool modified;
     if(menuTop[menuLevel] > menuPos[menuLevel])
         menuTop[menuLevel] = menuPos[menuLevel];
@@ -2494,9 +2654,11 @@ void UIDisplay::adjustMenuPos()
             if(!ent->showEntry())
                 skipped++;
         }
-        if(menuTop[menuLevel] + skipped + UI_ROWS - 1 < menuPos[menuLevel])
+        if((menuTop[menuLevel] + skipped + UI_ROWS) - 1 < menuPos[menuLevel])
         {
-            menuTop[menuLevel] = menuPos[menuLevel] + 1 - UI_ROWS;
+            //menuTop[menuLevel] = (menuPos[menuLevel] + 1) - UI_ROWS;
+            menuTop[menuLevel] = ((int)menuPos[menuLevel] +1);
+            menuTop[menuLevel] -= UI_ROWS; // yes looks stupid but did not work otherwise with 5 rows why ever
             modified = true;
         }
     }
@@ -2562,11 +2724,12 @@ bool UIDisplay::nextPreviousAction(int16_t next, bool allowMoves)
     UIMenuEntry **entries = (UIMenuEntry**)pgm_read_word(&(men->entries));
     UIMenuEntry *ent =(UIMenuEntry *)pgm_read_word(&(entries[menuPos[menuLevel]]));
     UIMenuEntry *testEnt;
-    // 0 = Info, 1 = Headline, 2 = submenu ref, 3 = direct action command
+    // 0 = Info, 1 = Headline, 2 = sub menu ref, 3 = direct action command
     //uint8_t entType = HAL::readFlashByte((PGM_P)&(ent->entryType));
     unsigned int action = pgm_read_word(&(ent->action));
     if(mtype == UI_MENU_TYPE_SUBMENU && activeAction == 0)   // browse through menu items
     {
+Com::printF(PSTR("ud start:"),(int)menuPos[menuLevel]);
         if((UI_INVERT_MENU_DIRECTION && next < 0) || (!UI_INVERT_MENU_DIRECTION && next > 0))
         {
             while(menuPos[menuLevel] + 1 < nr)
@@ -3200,19 +3363,18 @@ int UIDisplay::executeAction(unsigned int action, bool allowMoves)
         case UI_DITTO_2:
         case UI_DITTO_3:
 #if DUAL_X_AXIS
-		Extruder::dittoMode = 0;
-		Extruder::selectExtruderById(0);
-		Printer::homeXAxis();
-		if( action - UI_DITTO_0 > 0) {
-			Extruder::current = &extruder[1];
-			PrintLine::moveRelativeDistanceInSteps(-Extruder::current->xOffset + static_cast<int32_t>(Printer::xLength*0.5*Printer::axisStepsPerMM[X_AXIS]), 0, 0, 0, EXTRUDER_SWITCH_XY_SPEED, true, true);
-			Printer::currentPositionSteps[X_AXIS] = Printer::xMinSteps;
-			Extruder::current = &extruder[0];
-			Extruder::dittoMode =  1;
-		}
+			Extruder::dittoMode = 0;
+			Extruder::selectExtruderById(0);
+			Printer::homeXAxis();
+			if( action - UI_DITTO_0 > 0) {
+				Extruder::current = &extruder[1];
+				PrintLine::moveRelativeDistanceInSteps(-Extruder::current->xOffset + static_cast<int32_t>(Printer::xLength*0.5*Printer::axisStepsPerMM[X_AXIS]), 0, 0, 0, EXTRUDER_SWITCH_XY_SPEED, true, true);
+				Printer::currentPositionSteps[X_AXIS] = Printer::xMinSteps;
+				Extruder::current = &extruder[0];
+				Extruder::dittoMode =  1;
+			}
 #else
-	Extruder::dittoMode =  action - UI_DITTO_0;
-}
+			Extruder::dittoMode =  action - UI_DITTO_0;
 #endif
 		
             Extruder::dittoMode = action - UI_DITTO_0;
@@ -3398,6 +3560,9 @@ int UIDisplay::executeAction(unsigned int action, bool allowMoves)
             pushMenu(&ui_wiz_filamentchange, true);
             Printer::resetWizardStack();
             Printer::pushWizardVar(Printer::currentPositionSteps[E_AXIS]);
+			Printer::pushWizardVar(Printer::coordinateOffset[X_AXIS]);
+			Printer::pushWizardVar(Printer::coordinateOffset[Y_AXIS]);
+			Printer::pushWizardVar(Printer::coordinateOffset[Z_AXIS]);
             Printer::MemoryPosition();
             Extruder::current->retractDistance(FILAMENTCHANGE_SHORTRETRACT);
             float newZ = FILAMENTCHANGE_Z_ADD + Printer::currentPosition[Z_AXIS];
@@ -3417,6 +3582,9 @@ int UIDisplay::executeAction(unsigned int action, bool allowMoves)
             pushMenu(&ui_wiz_jamreheat, true);
             Printer::resetWizardStack();
             Printer::pushWizardVar(Printer::currentPositionSteps[E_AXIS]);
+			Printer::pushWizardVar(Printer::coordinateOffset[X_AXIS]);
+			Printer::pushWizardVar(Printer::coordinateOffset[Y_AXIS]);
+			Printer::pushWizardVar(Printer::coordinateOffset[Z_AXIS]);
             Printer::MemoryPosition();
             Extruder::current->retractDistance(FILAMENTCHANGE_SHORTRETRACT);
             float newZ = FILAMENTCHANGE_Z_ADD + Printer::currentPosition[Z_AXIS];
@@ -3593,8 +3761,8 @@ int UIDisplay::executeAction(unsigned int action, bool allowMoves)
             Com::printF(PSTR(" Buf. Len:"),(int)GCode::bufferLength);
             Com::printF(PSTR(" Wait resend:"),(int)GCode::waitingForResend);
             Com::printFLN(PSTR(" Recv. Write Pos:"),(int)GCode::commandsReceivingWritePosition);
-            Com::printF(PSTR("Min. XY Speed:"),Printer::minimumSpeed);
-            Com::printF(PSTR(" Min. Z Speed:"),Printer::minimumZSpeed);
+            //Com::printF(PSTR("Min. XY Speed:"),Printer::minimumSpeed);
+            //Com::printF(PSTR(" Min. Z Speed:"),Printer::minimumZSpeed);
             Com::printF(PSTR(" Buffer:"),PrintLine::linesCount);
             Com::printF(PSTR(" Lines pos:"),(int)PrintLine::linesPos);
             Com::printFLN(PSTR(" Write Pos:"),(int)PrintLine::linesWritePos);
@@ -3639,7 +3807,7 @@ void UIDisplay::mediumAction()
 #endif
 }
 
-// Gets calles from main tread
+// Gets calls from main tread only
 void UIDisplay::slowAction(bool allowMoves)
 {
     millis_t time = HAL::timeInMilliseconds();

@@ -21,7 +21,7 @@
 #define MAX_CMD_SIZE 96
 #define ARRAY_SIZE(_x)	(sizeof(_x)/sizeof(_x[0]))
 
-enum FirmwareState {NotBusy=0,Processing,Paused,WaitHeater};
+enum FirmwareState {NotBusy=0,Processing,Paused,WaitHeater,DoorOpen};
 
 class SDCard;
 class GCode   // 52 uint8_ts per command needed
@@ -75,14 +75,23 @@ public:
     {
         return ((params & 8)!=0);
     }
+	inline void unsetX() {
+		params &= ~8;
+	}
     inline bool hasY()
     {
         return ((params & 16)!=0);
     }
+	inline void unsetY() {
+		params &= ~16;
+	}
     inline bool hasZ()
     {
         return ((params & 32)!=0);
     }
+	inline void unsetZ() {
+		params &= ~32;
+	}
     inline bool hasNoXYZ()
     {
         return ((params & 56)==0);
@@ -195,6 +204,7 @@ public:
 	static uint32_t keepAliveInterval;
     friend class SDCard;
     friend class UIDisplay;
+	static FSTRINGPARAM(fatalErrorMsg);
 private:
     void debugCommandBuffer();
     void checkAndPushCommand();
@@ -216,7 +226,6 @@ private:
         return l;
     }
 
-	static FSTRINGPARAM(fatalErrorMsg);
     static GCode commandsBuffered[GCODE_BUFFER_SIZE]; ///< Buffer for received commands.
     static uint8_t bufferReadIndex; ///< Read position in gcode_buffer.
     static uint8_t bufferWriteIndex; ///< Write position in gcode_buffer.
@@ -234,6 +243,83 @@ private:
     static millis_t timeOfLastDataPacket; ///< Time, when we got the last data packet. Used to detect missing uint8_ts.
     static uint8_t formatErrors; ///< Number of sequential format errors
 	static millis_t lastBusySignal; ///< When was the last busy signal
+};
+#ifndef MAX_DATA_SOURCES
+#define MAX_DATA_SOURCES 4
+#endif
+
+/** This class defines the general interface to handle gcode communication with the firmware. This
+allows it to connect to different data sources and handle them all inside the same data structure.
+If several readers are active, the first one sending a byte pauses all other inputs until the command
+is complete. Only then the next reader will be queried. New queries are started in round robin fashion
+so every channel gets the same chance to send commands.
+
+Available source types are:
+- serial communication port
+- sd card
+- flash memory
+*/
+class GCodeSource {
+    static fast8_t numSources; ///< Number of data sources available
+    static fast8_t numWriteSources;
+    static GCodeSource *sources[MAX_DATA_SOURCES];    
+    static GCodeSource *writeableSources[MAX_DATA_SOURCES];
+public:
+    static GCodeSource *activeSource;
+    static void registerSource(GCodeSource *newSource);
+    static void removeSource(GCodeSource *delSource);    
+    static void rotateSource(); ///< Move active to next source
+    static void writeToAll(uint8_t byte); ///< Write to all listening sources    
+    uint32_t lastLineNumber;
+    uint8_t wasLastCommandReceivedAsBinary; ///< Was the last successful command in binary mode?
+    
+    GCodeSource();
+    virtual bool isOpen() = 0;
+    virtual bool supportsWrite() = 0; ///< true if write is a non dummy function
+    virtual bool closeOnError() = 0; // return true if the channel can not interactively correct errors.
+    virtual bool dataAvailable() = 0; // would read return a new byte?
+    virtual int readByte() = 0;
+    virtual void writeByte(uint8_t byte);
+};
+
+class SerialGCodeSource: public GCodeSource {
+public:    
+    SerialGCodeSource();
+    virtual bool isOpen();
+    virtual bool supportsWrite(); ///< true if write is a non dummy function
+    virtual bool closeOnError(); // return true if the channel can not interactively correct errors.
+    virtual bool dataAvailable(); // would read return a new byte?
+    virtual int readByte();
+    virtual void writeByte(uint8_t byte);
+};
+
+class SDCardGCodeSource: public GCodeSource {
+    public:
+    virtual bool isOpen();
+    virtual bool supportsWrite(); ///< true if write is a non dummy function
+    virtual bool closeOnError(); // return true if the channel can not interactively correct errors.
+    virtual bool dataAvailable(); // would read return a new byte?
+    virtual int readByte();
+    virtual void writeByte(uint8_t byte);
+};
+
+class FlashGCodeSource: public GCodeSource {
+    public:
+    FSTRINGPARAM(pointer);
+    bool finished;
+    
+    FlashGCodeSource();
+    virtual bool isOpen();
+    virtual bool supportsWrite(); ///< true if write is a non dummy function
+    virtual bool closeOnError(); // return true if the channel can not interactively correct errors.
+    virtual bool dataAvailable(); // would read return a new byte?
+    virtual int readByte();
+    virtual void writeByte(uint8_t byte);
+    
+    /** Execute the commands at the given memory. If already an other string is
+    running, the command will wait until that command finishes. If wait is true it
+    will also wait for given command to be enqueued completely. */
+    void executeCommands(FSTRINGPARAM(data),bool waitFinish);
 };
 
 #if JSON_OUTPUT

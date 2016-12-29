@@ -198,8 +198,8 @@ private:
     NonlinearSegment segments[DELTASEGMENTS_PER_PRINTLINE];
 #endif
     ticks_t fullInterval;     ///< interval at full speed in ticks/step.
-    uint16_t accelSteps;        ///< How much steps does it take, to reach the plateau.
-    uint16_t decelSteps;        ///< How much steps does it take, to reach the end speed.
+    uint32_t accelSteps;        ///< How much steps does it take, to reach the plateau.
+    uint32_t decelSteps;        ///< How much steps does it take, to reach the end speed.
     uint32_t accelerationPrim; ///< Acceleration along primary axis
     uint32_t fAcceleration;    ///< accelerationPrim*262144/F_CPU
     speed_t vMax;              ///< Maximum reached speed in steps/s.
@@ -317,17 +317,44 @@ public:
             }
             else
 #endif
-                if(isZNegativeMove() && Endstops::zMin())
-                {
-                    setZMoveFinished();
-                }
-                else if(isZPositiveMove() && Endstops::zMax())
-                {
-#if MAX_HARDWARE_ENDSTOP_Z
-                    Printer::stepsRemainingAtZHit = stepsRemaining;
+#if MULTI_ZENDSTOP_HOMING
+           if(isZNegativeMove())
+           {
+				if(Endstops::zMin())
+					Printer::multiZHomeFlags &= ~1;
+				if(Endstops::z2MinMax())
+				   Printer::multiZHomeFlags &= ~2;
+				if(Printer::multiZHomeFlags == 0)
+					setZMoveFinished();
+           }
+           else if(isZPositiveMove())
+           {
+				if(Endstops::zMax())
+					Printer::multiZHomeFlags &= ~1;
+				if(Endstops::z2MinMax())
+					Printer::multiZHomeFlags &= ~2;
+				if(Printer::multiZHomeFlags == 0) {
+	           #if MAX_HARDWARE_ENDSTOP_Z
+					Printer::stepsRemainingAtZHit = stepsRemaining;
+	           #endif
+					setZMoveFinished();
+				}
+           }
+#else
+           if(isZNegativeMove() && Endstops::zMin())
+           {
+	           setZMoveFinished();
+           }
+           else if(isZPositiveMove() && Endstops::zMax())
+           {
+	           #if MAX_HARDWARE_ENDSTOP_Z
+	           Printer::stepsRemainingAtZHit = stepsRemaining;
+	           #endif
+	           setZMoveFinished();
+           }
 #endif
-                    setZMoveFinished();
-                }
+
+     
         }
 #if FEATURE_Z_PROBE
         else if(Printer::isZProbingActive() && isZNegativeMove()) {
@@ -455,7 +482,7 @@ public:
     {
         linesCount = 0;
         linesPos = linesWritePos;
-        Printer::setMenuMode(MENU_MODE_PRINTING, false);
+        Printer::setMenuMode(MENU_MODE_PRINTING, Printer::isPrinting());
     }
     // Only called from bresenham -> inside interrupt handle
     inline void updateAdvanceSteps(speed_t v, uint8_t max_loops, bool accelerate)
@@ -502,7 +529,7 @@ public:
     }
     INLINE bool moveDecelerating()
     {
-        if(stepsRemaining <= decelSteps)
+        if(stepsRemaining <= static_cast<int32_t>(decelSteps))
         {
             if (!(flags & FLAG_DECELERATING))
             {
@@ -656,7 +683,7 @@ public:
         HAL::forbidInterrupts();
         --linesCount;
         if(!linesCount)
-            Printer::setMenuMode(MENU_MODE_PRINTING, false);
+            Printer::setMenuMode(MENU_MODE_PRINTING, Printer::isPrinting());
     }
     static INLINE void pushLine()
     {

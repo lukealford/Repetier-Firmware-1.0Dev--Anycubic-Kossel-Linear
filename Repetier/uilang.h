@@ -98,7 +98,7 @@
 #define LANGUAGE_FI_ID 11
 
 #define NUM_LANGUAGES_KNOWN 12
-#define NUM_TRANSLATED_WORDS 267
+#define NUM_TRANSLATED_WORDS 270
 
 // For selectable translations we refer to each text by a id which gets
 // defined here. The list starts at 0 and defines the position in the
@@ -373,7 +373,9 @@
 #define UI_TEXT_Y_OFFSET_ID 264
 #define UI_TEXT_Z_OFFSET_ID 265
 #define UI_TEXT_DBG_ENDSTOP_ID 266 //     "EndStop:%dp"
-
+#define UI_TEXT_LAYER_ID 267
+#define UI_TEXT_PROGRESS_ID 268
+#define UI_TEXT_PRINTNAME_ID 269
 // Universal definitions
 
 #define UI_TEXT_SEL              cSEL
@@ -397,7 +399,7 @@
 #define UI_TEXT_BACK_EN             "Back " cUP
 #define UI_TEXT_QUICK_SETTINGS_EN   "Quick settings"
 #define UI_TEXT_ERRORMSG_EN         "%oe"
-#define UI_TEXT_CONFIGURATION_EN    "Configuration"
+#define UI_TEXT_CONFIGURATION_EN    "Settings"
 #define UI_TEXT_POSITION_EN         "Position"
 #define UI_TEXT_EXTRUDER_EN         "Extruder"
 #define UI_TEXT_SD_CARD_EN          "SD card"
@@ -671,6 +673,9 @@
 #define UI_TEXT_X_OFFSET_EN "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_EN "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_EN "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_EN "Layer %Pl/%PL"
+#define UI_TEXT_PROGRESS_EN "%Pp%%%"
+#define UI_TEXT_PRINTNAME_EN "%Pn"
 
 
 
@@ -689,7 +694,7 @@
 #define UI_TEXT_BACK_DE             "Zur" STR_uuml "ck " cUP
 #define UI_TEXT_QUICK_SETTINGS_DE   "Schnelleinst."
 #define UI_TEXT_ERRORMSG_DE         "%oe"
-#define UI_TEXT_CONFIGURATION_DE    "Konfiguration"
+#define UI_TEXT_CONFIGURATION_DE    "Einstellungen"
 #define UI_TEXT_POSITION_DE         "Position"
 #define UI_TEXT_EXTRUDER_DE         "Extruder"
 #define UI_TEXT_SD_CARD_DE          "SD Karte"
@@ -965,6 +970,9 @@
 #define UI_TEXT_X_OFFSET_DE "X-Offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_DE "Y-Offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_DE "Z-Offset:%T2mm"
+#define UI_TEXT_LAYER_DE "Layer %Pl/%PL"
+#define UI_TEXT_PROGRESS_DE "%Pp%%%"
+#define UI_TEXT_PRINTNAME_DE "%Pn"
 
 
 // Dutch translation
@@ -1258,6 +1266,9 @@
 #define UI_TEXT_X_OFFSET_NL "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_NL "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_NL "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_NL "Laag %Pl/%PL"
+#define UI_TEXT_PROGRESS_NL "%Pp%%%"
+#define UI_TEXT_PRINTNAME_NL "%Pn"
 
 
 // *************** Brazilian portuguese translation ****************
@@ -1553,6 +1564,9 @@
 #define UI_TEXT_X_OFFSET_PT "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_PT "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_PT "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_PT "Camada %Pl/%PL"
+#define UI_TEXT_PROGRESS_PT "%Pp%%%"
+#define UI_TEXT_PRINTNAME_PT "%Pn"
 
 
 // *************** Italian translation ****************
@@ -1846,6 +1860,9 @@
 #define UI_TEXT_X_OFFSET_IT "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_IT "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_IT "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_IT "Layer %Pl/%PL"
+#define UI_TEXT_PROGRESS_IT "%Pp%%%"
+#define UI_TEXT_PRINTNAME_IT "%Pn"
 
 
 // Spanish translation
@@ -2138,6 +2155,9 @@
 #define UI_TEXT_X_OFFSET_ES "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_ES "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_ES "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_ES "Capa %Pl/%PL"
+#define UI_TEXT_PROGRESS_ES "%Pp%%%"
+#define UI_TEXT_PRINTNAME_ES "%Pn"
 
 
 // *************** Swedish translation ****************
@@ -2432,6 +2452,9 @@
 #define UI_TEXT_X_OFFSET_SE "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_SE "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_SE "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_SE "Lager %Pl/%PL"
+#define UI_TEXT_PROGRESS_SE "%Pp%%%"
+#define UI_TEXT_PRINTNAME_SE "%Pn"
 
 
 // *************** French translation ****************
@@ -2476,13 +2499,13 @@
 #define UI_TEXT_BED_TEMP_FR         "Lit Temp:%eb/%Eb\002C"
 #define UI_TEXT_EXTR0_TEMP_FR       "Temp. 1 :%e0/%E0\002C"
 #define UI_TEXT_EXTR1_TEMP_FR       "Temp. 2 :%e1/%E1\002C"
-#define UI_TEXT_EXTR2_TEMP_FR       "Temp. 2 :%e2/%E2\002C"
+#define UI_TEXT_EXTR2_TEMP_FR       "Temp. 3 :%e2/%E2\002C"
 #define UI_TEXT_EXTR0_OFF_FR        "Extrudeuse 1 Off"
 #define UI_TEXT_EXTR1_OFF_FR        "Extrudeuse 2 Off"
 #define UI_TEXT_EXTR2_OFF_FR        "Extrudeuse 3 Off"
 #define UI_TEXT_EXTR0_SELECT_FR     "%X0 Select. Extr. 1"
 #define UI_TEXT_EXTR1_SELECT_FR     "%X1 Select. Extr. 2"
-#define UI_TEXT_EXTR2_SELECT_FR     "%X1 Select. Extr. 3"
+#define UI_TEXT_EXTR2_SELECT_FR     "%X2 Select. Extr. 3"
 #define UI_TEXT_EXTR_ORIGIN_FR      "Set Origin"
 #define UI_TEXT_PRINT_X_FR          "Imprim. X:%ax"
 #define UI_TEXT_PRINT_Y_FR          "Imprim. Y:%ay"
@@ -2726,6 +2749,9 @@
 #define UI_TEXT_X_OFFSET_FR "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_FR "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_FR "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_FR "Couche %Pl/%PL"
+#define UI_TEXT_PROGRESS_FR "%Pp%%%"
+#define UI_TEXT_PRINTNAME_FR "%Pn"
 
 
 // *************** Czech translation ****************
@@ -2778,7 +2804,7 @@
 #define UI_TEXT_EXTR2_OFF_CZ        "Extruder 3 vyp."
 #define UI_TEXT_EXTR0_SELECT_CZ     "%X0 Zvolit Extr. 1"
 #define UI_TEXT_EXTR1_SELECT_CZ     "%X1 Zvolit Extr. 2"
-#define UI_TEXT_EXTR2_SELECT_CZ     "%X1 Zvolit Extr. 3"
+#define UI_TEXT_EXTR2_SELECT_CZ     "%X2 Zvolit Extr. 3"
 #define UI_TEXT_EXTR_ORIGIN_CZ      "Nastavit pocatek"
 #define UI_TEXT_PRINT_X_CZ          "Tisk X:%ax"
 #define UI_TEXT_PRINT_Y_CZ          "Tisk Y:%ay"
@@ -3020,6 +3046,9 @@
 #define UI_TEXT_X_OFFSET_CZ "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_CZ "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_CZ "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_CZ "Vrstva %Pl/%PL"
+#define UI_TEXT_PROGRESS_CZ "%Pp%%%"
+#define UI_TEXT_PRINTNAME_CZ "%Pn"
 
 
 // *************** Polish translation ****************
@@ -3071,7 +3100,7 @@
 #define UI_TEXT_EXTR2_OFF_PL        "Wyl. Extruder 3"
 #define UI_TEXT_EXTR0_SELECT_PL     "%X0 Wybierz Extr. 1"
 #define UI_TEXT_EXTR1_SELECT_PL     "%X1 Wybierz Extr. 2"
-#define UI_TEXT_EXTR2_SELECT_PL     "%X1 Wybierz Extr. 3"
+#define UI_TEXT_EXTR2_SELECT_PL     "%X2 Wybierz Extr. 3"
 #define UI_TEXT_EXTR_ORIGIN_PL      "Ustaw jako zero"
 #define UI_TEXT_PRINT_X_PL          "Drukow. X   :%ax"
 #define UI_TEXT_PRINT_Y_PL          "Drukow. Y   :%ay"
@@ -3312,6 +3341,9 @@
 #define UI_TEXT_X_OFFSET_PL "Przesun w X : %T0mm"
 #define UI_TEXT_Y_OFFSET_PL "Przesun w Y : %T1mm"
 #define UI_TEXT_Z_OFFSET_PL "Przesun w Z :%T2mm"
+#define UI_TEXT_LAYER_PL "Warstwa %Pl/%PL"
+#define UI_TEXT_PROGRESS_PL "%Pp%%%"
+#define UI_TEXT_PRINTNAME_PL "%Pn"
 
 // Türk
 
@@ -3600,6 +3632,9 @@
 #define UI_TEXT_X_OFFSET_TR "Set X offset:%T0mm"
 #define UI_TEXT_Y_OFFSET_TR "Set Y offset:%T1mm"
 #define UI_TEXT_Z_OFFSET_TR "Set Z offset:%T2mm"
+#define UI_TEXT_LAYER_TR "Katman %Pl/%PL"
+#define UI_TEXT_PROGRESS_TR "%Pp%%%"
+#define UI_TEXT_PRINTNAME_TR "%Pn"
 
 // *************** Finnish translation ****************
 // ********** By Matti Granstedt 28.01.2016 ***********
@@ -3891,3 +3926,6 @@
 #define UI_TEXT_X_OFFSET_FI "Aseta X poikkeama:%T0mm"
 #define UI_TEXT_Y_OFFSET_FI "Aseta Y poikkeama:%T1mm"
 #define UI_TEXT_Z_OFFSET_FI "Aseta Z poikkeama:%T2mm"
+#define UI_TEXT_LAYER_FI "Kerros %Pl/%PL"
+#define UI_TEXT_PROGRESS_FI "%Pp%%%"
+#define UI_TEXT_PRINTNAME_FI "%Pn"
