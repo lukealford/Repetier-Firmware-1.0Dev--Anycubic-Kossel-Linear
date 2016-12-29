@@ -46,7 +46,7 @@ This repository has support for the [BL-Touch](https://www.indiegogo.com/project
 See the BL Touch in action,
 [Anycubic Kossel - BLTouch](https://www.youtube.com/watch?v=ye8GKOYioHY)
 
-To run Autobed leveling following this [z-probing](https://www.repetier.com/documentation/repetier-firmware/z-probing/) guide by Repetier is great.
+To run Autobed leveling follow this [z-probing](https://www.repetier.com/documentation/repetier-firmware/z-probing/) guide by Repetier.
 
 
 ##Manual Calibration
