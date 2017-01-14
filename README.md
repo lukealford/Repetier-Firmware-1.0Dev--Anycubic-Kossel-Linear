@@ -60,7 +60,7 @@ Run a 7 point calibration and add the adjustment it calulates into your eeprom s
 
 * End stops = Tower X,Y,Z endstrop offset
 * Diagonal rod Length = Diagonal rod Length
-* Delta Radius =  Max printable radius
+* Delta Radius =  Horizontal Rod Radius a 0,0
 * Homed height =  Z Max Length
 * Tower position angle corrections = Delta Radius A,B,C
 
