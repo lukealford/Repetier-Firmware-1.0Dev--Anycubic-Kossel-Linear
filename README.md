@@ -1,8 +1,8 @@
-##Repetier-Firmware 1.0Dev- Anycubic Kossel[Linear]
+## Repetier-Firmware 1.0Dev- Anycubic Kossel[Linear]
 
 
 
-###Compilation instructions
+### Compilation instructions
 
 Tested & compiled on an Arduino 2560 mega & Ramps 1.4
 
@@ -38,9 +38,9 @@ to change these values. Alternatively, send the commands
  M500
 to copy the new values in Configuration.h to eeprom.
 
-###Calibration
+# Calibration
 
-##Autobed level
+### Autobed level
 This repository has support for the [BL-Touch](https://www.indiegogo.com/projects/bltouch-auto-bed-leveling-sensor-for-3d-printers#/)
 
 See the BL Touch in action,
@@ -49,7 +49,7 @@ See the BL Touch in action,
 To run Autobed leveling follow this [z-probing](https://www.repetier.com/documentation/repetier-firmware/z-probing/) guide by Repetier.
 
 
-##Manual Calibration
+### Manual Calibration
 
 Measure your Z height from the base of the bed to the tip of the hotend, set this your eeprom under Z Max Length. Save and rehome.
 
